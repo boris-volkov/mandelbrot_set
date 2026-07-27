@@ -1,6 +1,6 @@
 // Worker plumbing. One of these per CPU core; the arithmetic lives in kernel.js.
 
-import { computeReference, directTile, INTERIOR, perturbTile } from './kernel.js';
+import { computeReference, directTile, perturbTile } from './kernel.js';
 
 // The reference orbit for the current frame. Pushed to us once per frame
 // rather than bundled with every tile -- it can be megabytes.
@@ -36,16 +36,5 @@ onmessage = (event) => {
 		directTile(out, tile.w, tile.h, x0, y0, perPixel, maxIterations);
 	}
 
-	// The spread of escape values in this tile, so the palette can be stretched
-	// to fit the frame. Interior pixels don't have one and are skipped.
-	let lo = Infinity;
-	let hi = -Infinity;
-	for (let i = 0; i < out.length; i++) {
-		const v = out[i];
-		if (v === INTERIOR) continue;
-		if (v < lo) lo = v;
-		if (v > hi) hi = v;
-	}
-
-	postMessage({ kind: 'tile', tile, data: out, lo, hi }, [out.buffer]);
+	postMessage({ kind: 'tile', tile, data: out }, [out.buffer]);
 };

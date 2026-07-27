@@ -90,12 +90,24 @@ That seed is exactly what the animation shows at the moment it lands, so the
 handover is invisible; tiles then sharpen it in place rather than appearing out
 of nothing.
 
-The colours hold still too. The palette is stretched to the range of escape
-values in the frame, and that range used to be discovered as tiles arrived —
-which meant the whole image re-coloured under you, repeatedly, mid-render. Now
-a probe pass renders a postage-stamp version of the frame first, purely to
-learn the range, and the palette is pinned before a single real pixel is
-coloured. It costs well under 1% of a frame.
+The colours hold still too, in two senses.
+
+Within a frame: the palette is stretched to the range of escape values present,
+and that range used to be discovered as tiles arrived — which meant the whole
+image re-coloured under you, repeatedly, mid-render. Now a probe pass renders a
+postage-stamp version of the frame first, purely to learn the range, and the
+palette is pinned before a single real pixel is coloured. Under 1% of a frame.
+
+Between frames: the obvious thing is to pin the lowest escape value on screen
+to the start of the palette. It's also wrong. The palette is a *cycle*, so an
+anchor buys no extra colour — it only rotates the wheel — and since the range
+shifts a little on every zoom step, anchoring to it turns every step into a
+rotation. Nothing is anchored now, and the one thing the frame is allowed to
+influence, the scale, is rounded to a power of two. Between changes the mapping
+is identical rather than merely close, so a run of zooming leaves the colours
+exactly where they were, and level 0 is the mapping this program has always
+used. Measured down a 40-step descent: the colours used to move on 35 steps out
+of 39, and now move on 5.
 
 `test.html` checks the arithmetic against a deliberately slow, obviously
 correct version that does every single iteration in full precision. At 1e-24

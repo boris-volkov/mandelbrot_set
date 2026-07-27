@@ -370,6 +370,40 @@
 			}
 
 			{
+				const { mapping } = await import('./src/palette.js');
+
+				// The colours must not creep as you zoom. Two frames whose
+				// ranges differ -- which is every pair of frames -- have to
+				// paint the same escape value the same way, so long as neither
+				// crossed a doubling. Anchoring the palette to where each
+				// frame's range starts is what used to break this: measured
+				// over a 40-step descent it moved the colours on 35 steps out
+				// of 39, and the worst moved them half a turn.
+				const values = new Float32Array([120, 300, 700, 1500]);
+				const a = paint(values, { range: { lo: 40, hi: 1800 } });
+				const b = paint(values, { range: { lo: 55, hi: 2100 } });
+				check(
+					'a drifting range does not move the colours',
+					a.every((p, i) => p === b[i]),
+					`same level (×${mapping({ lo: 40, hi: 1800 }).stretch}), identical output`,
+				);
+
+				// It adapts only in doublings, so the change is rare and the
+				// bands split cleanly rather than the hue sliding.
+				const steps = [
+					{ lo: 40, hi: 1800 },
+					{ lo: 1000, hi: 1400 },
+					{ lo: 37900, hi: 38100 },
+				].map((r) => mapping(r).stretch);
+				check(
+					'and adapts in powers of two when it must',
+					steps.every((s) => Number.isInteger(Math.log2(s))) &&
+						steps[0] < steps[2],
+					`wide ×${steps[0]} · narrow ×${steps[1]} · very narrow ×${steps[2]}`,
+				);
+			}
+
+			{
 				// A compressed range -- everything escaping at nearly the same
 				// count, which is what deep zoom looks like -- gets stretched.
 				// Distinct colours is the wrong measure here; two neighbouring

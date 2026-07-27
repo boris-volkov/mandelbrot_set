@@ -16,6 +16,7 @@
 //
 //   3. The frame proper, cut into tiles and shared round the pool.
 
+import { INTERIOR } from './kernel.js';
 import { Cancelled, WorkerPool } from './pool.js';
 import { colorize } from './palette.js';
 
@@ -26,6 +27,30 @@ const PROBE_WIDTH = 56;
 
 /** What we guess a frame will cost before we've ever timed one. */
 const DEFAULT_PREDICTION = 320;
+
+/**
+ * The spread of escape values in a tile, ignoring pixels that never escaped.
+ *
+ * The outright extremes, not percentiles. Trimming the tails was worth trying
+ * -- a coarse probe catches different outliers each frame, so the raw maximum
+ * is jumpy -- but the palette only reads the *width* of this, and only to pick
+ * a power of two, so the jumpiness mostly washes out. Trimming even 0.2% off
+ * each end narrows a zoomed-out frame enough to push it up a level, which
+ * would quietly restyle the opening view for no gain.
+ */
+function spread(values) {
+	let lo = Infinity;
+	let hi = -Infinity;
+	let escaped = 0;
+	for (let i = 0; i < values.length; i++) {
+		const v = values[i];
+		if (v === INTERIOR) continue;
+		escaped++;
+		if (v < lo) lo = v;
+		if (v > hi) hi = v;
+	}
+	return escaped >= 16 && hi > lo ? { lo, hi } : null;
+}
 
 export class Renderer {
 	#buffer = document.createElement('canvas');
@@ -77,6 +102,11 @@ export class Renderer {
 	 */
 	get complete() {
 		return this.#complete;
+	}
+
+	/** The spread of escape values the palette is currently pinned to. */
+	get range() {
+		return this.#frame?.range ?? null;
 	}
 
 	/** Resize the buffer. Returns true if it actually changed. */
@@ -222,9 +252,7 @@ export class Renderer {
 				height: probeHeight,
 				perPixel: (state.perPixel * width) / PROBE_WIDTH,
 			});
-			if (Number.isFinite(probe.lo) && Number.isFinite(probe.hi)) {
-				range = { lo: probe.lo, hi: probe.hi };
-			}
+			range = spread(probe.data);
 		} catch (error) {
 			return this.#fail(error, stale());
 		}
