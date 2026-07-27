@@ -88,10 +88,14 @@ export class Viewport {
 		return changed;
 	}
 
-	/** The view the pixels on screen represent right now, mid-move included. */
+	/**
+	 * The view the pixels on screen represent right now, mid-move included.
+	 * Always a copy -- handing out the live object is how "where we were" and
+	 * "where we're going" end up being the same thing.
+	 */
 	current() {
 		const move = this.#move;
-		if (!move || move.landed) return this.#target;
+		if (!move || move.landed) return this.#target.clone();
 
 		const p = smoothstep(clamp((performance.now() - move.start) / move.duration, 0, 1));
 		const view = move.from.clone();
@@ -109,7 +113,14 @@ export class Viewport {
 	 */
 	go(target, { animate = true } = {}) {
 		const from = this.#target ? this.current() : null;
-		this.#target = target;
+
+		// Take our own copy. The caller navigates by mutating a single state
+		// object in place, so holding a reference to it would mean `from` and
+		// `target` were the same object by the time we got here -- no
+		// difference to animate, and a render that could change underneath
+		// itself while it was still reading fields off it.
+		const view = target.clone();
+		this.#target = view;
 
 		if (from) {
 			// Snapshot what's on screen. It's both the thing we animate and
@@ -118,11 +129,11 @@ export class Viewport {
 			this.#previous.height = this.#canvas.height;
 			this.#previousCtx.drawImage(this.#canvas, 0, 0);
 
-			const delta = target.worldDelta(from);
+			const delta = view.worldDelta(from);
 			const landing = sampleRect(
 				from,
 				delta,
-				target.perPixel,
+				view.perPixel,
 				1,
 				this.#canvas.width,
 				this.#canvas.height,
@@ -130,12 +141,12 @@ export class Viewport {
 			this.#renderer.seedFrom(this.#previous, landing.x, landing.y, landing.w, landing.h);
 
 			this.#move =
-				animate && this.#worthAnimating(from, target)
+				animate && this.#worthAnimating(from, view)
 					? {
 							from,
 							delta,
 							start: performance.now(),
-							duration: clamp(this.#renderer.predict(target), MIN_MS, MAX_MS),
+							duration: clamp(this.#renderer.predict(view), MIN_MS, MAX_MS),
 							landed: false,
 							settleFrom: null,
 						}
@@ -144,7 +155,7 @@ export class Viewport {
 			this.#move = null;
 		}
 
-		this.#renderer.render(target);
+		this.#renderer.render(view);
 		this.#run();
 	}
 

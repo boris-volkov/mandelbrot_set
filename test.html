@@ -572,6 +572,21 @@
 				const shown = await settled();
 				check('the first frame lands on screen', shown && checksum(visible) !== 0);
 
+				// Navigation mutates one state object in place rather than
+				// making a new one each time. If the viewport keeps a reference
+				// to it instead of a copy, "where we were" and "where we're
+				// going" become the same object and the zoom stops animating --
+				// which is what happened, and only showed up on back/forward,
+				// where popstate does build a fresh object.
+				const live = viewport.current();
+				const beforeScale = live.perPixel;
+				live.zoomTo({ x: 160, y: 120 }, 2, 320, 240);
+				check(
+					'the viewport keeps its own copy of the view',
+					viewport.current().perPixel === beforeScale && live.perPixel !== beforeScale,
+					'mutating the caller’s state must not move the viewport',
+				);
+
 				// Zoom somewhere expensive enough that the frame can't be instant.
 				const next = ViewState.fromURL(
 					'https://x/?x=-0.743643887037151&y=0.131825904205330&s=2e-9&i=4000',
