@@ -1,26 +1,89 @@
 <!doctype html>
-
 <html lang="en">
 	<head>
-		<meta charset="utf-8">
-		<title>Ѭ</title>
-		<link rel="stylesheet" href="style.css"></link>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+		<meta
+			name="description"
+			content="An explorer for the Mandelbrot set, with arbitrary-precision deep zoom."
+		/>
+		<title>Ѭ the Mandelbrot set</title>
+		<link rel="stylesheet" href="style.css" />
 	</head>
 
 	<body>
-		<div class="control_bar">
-			<div id="left">[←]:left</div>
-			<div id="up">[↑]:up</div>
-			<div id="down">[↓]:down</div>
-			<div id="right">[→]:right</div>
-			<div id="out">[o]:out</div>
-			<div id="reset">[esc]:reset</div>
+		<canvas id="canvas"></canvas>
 
+		<section id="readout" aria-live="off">
+			<div class="row"><span class="key">re</span><span class="val" id="re">—</span></div>
+			<div class="row"><span class="key">im</span><span class="val" id="im">—</span></div>
+			<div class="row"><span class="key">zoom</span><span class="val" id="zoom">—</span></div>
+			<div class="row"><span class="key">iter</span><span class="val" id="iter">—</span></div>
+			<div class="row"><span class="key">math</span><span class="val" id="math">—</span></div>
+			<div class="row"><span class="key">frame</span><span class="val" id="frame">—</span></div>
+		</section>
+
+		<div id="progress" hidden>
+			<div class="label"><span id="progress-phase">rendering</span><span id="clock">0.0s</span></div>
+			<div class="track"><div class="bar" id="progress-bar"></div></div>
+			<div class="detail" id="progress-detail"></div>
+			<button type="button" id="cancel">stop</button>
 		</div>
 
-		<div class="canvas_holder">
-			<canvas id="canvas"></canvas>
-		</div>
-		<script src="mandelbrot.js"></script>
+		<nav id="toolbar">
+			<div class="group">
+				<button type="button" data-act="left" title="pan left (←)">←</button>
+				<button type="button" data-act="up" title="pan up (↑)">↑</button>
+				<button type="button" data-act="down" title="pan down (↓)">↓</button>
+				<button type="button" data-act="right" title="pan right (→)">→</button>
+			</div>
+			<div class="group">
+				<button type="button" data-act="in" title="zoom in (i, or click the image)">+</button>
+				<button type="button" data-act="out" title="zoom out (o)">−</button>
+				<button type="button" data-act="reset" title="back to the start (esc)">reset</button>
+			</div>
+			<div class="group">
+				<button type="button" data-act="iter-down" title="fewer iterations (−)">iter −</button>
+				<button type="button" data-act="iter-up" title="more iterations (+)">iter +</button>
+				<button type="button" data-act="auto" title="pick iterations automatically (a)">auto</button>
+			</div>
+			<div class="group">
+				<button type="button" data-act="palette" title="next palette (p)">palette</button>
+				<button type="button" data-act="shift" title="shift the colours (c)">shift</button>
+			</div>
+			<div class="group">
+				<button type="button" data-act="link" title="copy a link to this view (l)">link</button>
+				<button type="button" data-act="save" title="save a PNG (s)">save</button>
+				<button type="button" data-act="help" title="keyboard shortcuts (?)">?</button>
+			</div>
+		</nav>
+
+		<div id="toast" hidden></div>
+
+		<dialog id="help">
+			<h2>the Mandelbrot set</h2>
+			<p>
+				Click anywhere to zoom in. Drag to pan, scroll to zoom. Keep going — the centre is
+				held in arbitrary precision, so it stays sharp long after ordinary arithmetic gives
+				up.
+			</p>
+			<table>
+				<tr><td>click / scroll</td><td>zoom in on a point</td></tr>
+				<tr><td>drag</td><td>pan</td></tr>
+				<tr><td>arrows</td><td>pan by a tenth of a screen</td></tr>
+				<tr><td>i / o</td><td>zoom in / out</td></tr>
+				<tr><td>+ / −</td><td>more / fewer iterations</td></tr>
+				<tr><td>a</td><td>automatic iteration count</td></tr>
+				<tr><td>p</td><td>next palette</td></tr>
+				<tr><td>c / [ / ]</td><td>shift colours, spread them out or in</td></tr>
+				<tr><td>l</td><td>copy a link to this view</td></tr>
+				<tr><td>s</td><td>save a PNG</td></tr>
+				<tr><td>h</td><td>hide the interface</td></tr>
+				<tr><td>esc</td><td>back to the start</td></tr>
+			</table>
+			<form method="dialog"><button>close</button></form>
+		</dialog>
+
+		<script type="module" src="src/main.js"></script>
 	</body>
 </html>

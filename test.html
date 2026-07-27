@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>self-check</title>
+		<style>
+			body {
+				background: #05070c;
+				color: #cfd8e3;
+				font: 13px/1.7 ui-monospace, "Courier New", monospace;
+				padding: 24px;
+			}
+			.pass { color: #6ec98a; }
+			.fail { color: #e2657a; }
+			.note { color: #7a8899; }
+			h1 { font-size: 15px; font-weight: normal; color: coral; }
+		</style>
+	</head>
+	<body>
+		<h1>mandelbrot self-check</h1>
+		<pre id="out">running…</pre>
+
+		<script type="module">
+			import {
+				fromDecimalString,
+				fromNumber,
+				mul,
+				precisionFor,
+				toDecimalString,
+				toNumber,
+			} from './src/fixed.js';
+			import {
+				computeReference,
+				directTile,
+				ESCAPE_RADIUS,
+				INTERIOR,
+				perturbTile,
+			} from './src/kernel.js';
+			import { ViewState } from './src/state.js';
+			import { colorize } from './src/palette.js';
+
+			const lines = [];
+			let failures = 0;
+
+			function check(name, ok, detail = '') {
+				if (!ok) failures++;
+				lines.push(
+					`<span class="${ok ? 'pass' : 'fail'}">${ok ? 'pass' : 'FAIL'}</span>  ${name}` +
+						(detail ? `  <span class="note">${detail}</span>` : ''),
+				);
+			}
+
+			function note(text) {
+				lines.push(`<span class="note">${text}</span>`);
+			}
+
+			// -- fixed point ------------------------------------------------
+
+			note('— fixed point —');
+
+			{
+				const prec = 128;
+				let worst = 0;
+				for (const v of [0, 1, -1, 0.5, -0.7436438870371587, 3.25, 1e-9, -1e-9, 2 ** -40]) {
+					const back = toNumber(fromNumber(v, prec), prec);
+					worst = Math.max(worst, Math.abs(back - v));
+				}
+				check('fromNumber/toNumber round-trips exactly', worst === 0, `max error ${worst}`);
+			}
+
+			{
+				const prec = 256;
+				const a = fromNumber(0.1, prec);
+				const b = fromNumber(0.3, prec);
+				const err = Math.abs(toNumber(mul(a, b, prec), prec) - 0.03);
+				check('mul is accurate', err < 1e-15, `0.1 × 0.3 off by ${err.toExponential(2)}`);
+			}
+
+			{
+				// 60 digits of a genuinely deep coordinate must survive a
+				// round trip through the URL representation.
+				const decimal = '-0.743643887037158704752191506114774166308973690483300346161' +
+					'6907';
+				const prec = 512;
+				const round = toDecimalString(fromDecimalString(decimal, prec), prec, 62);
+				check(
+					'decimal string round-trips at 62 places',
+					round.startsWith(decimal),
+					round.slice(0, 24) + '…',
+				);
+			}
+
+			{
+				const p = precisionFor(1e-40);
+				check('precisionFor(1e-40) has headroom', p >= 133 + 48 && p % 64 === 0, `${p} bits`);
+			}
+
+			// -- the reference orbit ----------------------------------------
+
+			note('— reference orbit —');
+
+			{
+				// A point known to stay bounded; check against plain doubles.
+				const prec = 128;
+				const cx = fromNumber(-0.5, prec);
+				const cy = fromNumber(0.5, prec);
+				const { zr, zi, length } = computeReference({ cx, cy, prec, maxIterations: 40 });
+
+				let r = 0;
+				let i = 0;
+				let worst = 0;
+				for (let n = 1; n <= 40; n++) {
+					const ni = 2 * r * i + 0.5;
+					r = r * r - i * i - 0.5;
+					i = ni;
+					worst = Math.max(worst, Math.abs(zr[n] - r), Math.abs(zi[n] - i));
+				}
+				check(
+					'BigInt orbit agrees with the double orbit',
+					worst < 1e-12 && length === 41,
+					`max divergence ${worst.toExponential(2)}`,
+				);
+			}
+
+			// -- exact escape, for comparison -------------------------------
+
+			// The slow, obviously-correct version: every iteration in full
+			// precision. Far too slow for a whole image, perfect as a referee.
+			function exactEscape(cx, cy, prec, maxIterations) {
+				const R2 = fromNumber(ESCAPE_RADIUS * ESCAPE_RADIUS, prec);
+				let r = 0n;
+				let i = 0n;
+				let n = 0;
+				let modulus2 = 0;
+
+				while (n < maxIterations) {
+					const rr = mul(r, r, prec);
+					const ii = mul(i, i, prec);
+					if (rr + ii > R2) {
+						modulus2 = toNumber(rr + ii, prec);
+						break;
+					}
+					const ni = mul(r << 1n, i, prec) + cy;
+					r = rr - ii + cx;
+					i = ni;
+					n++;
+				}
+				if (n >= maxIterations) return INTERIOR;
+				return (
+					n -
+					Math.log(Math.log(Math.sqrt(modulus2)) / Math.log(ESCAPE_RADIUS)) / Math.LN2
+				);
+			}
+
+			// -- perturbation vs plain doubles ------------------------------
+
+			note('— perturbation —');
+
+			/** Fraction of pixels where `values` disagrees with the referee. */
+			function disagreement(values, referee) {
+				let wrong = 0;
+				for (let k = 0; k < values.length; k++) {
+					const a = values[k];
+					const b = referee[k];
+					if (a === INTERIOR || b === INTERIOR) {
+						if (a !== b) wrong++;
+					} else if (Math.abs(a - b) > 0.02) {
+						wrong++;
+					}
+				}
+				return wrong / values.length;
+			}
+
+			/** Render one tile every way we know how, and referee with exact BigInt. */
+			function survey({ cxs, cys, perPixel, maxIterations, size, referee = 256 }) {
+				const prec = precisionFor(perPixel);
+				const cx = fromDecimalString(cxs, prec);
+				const cy = fromDecimalString(cys, prec);
+				const dx0 = (-size / 2 + 0.5) * perPixel;
+				const dy0 = (-size / 2 + 0.5) * perPixel;
+
+				const started = performance.now();
+				const orbit = computeReference({ cx, cy, prec, maxIterations });
+				const orbitTime = performance.now() - started;
+
+				const perturbed = perturbTile(
+					new Float32Array(size * size),
+					size, size, dx0, dy0, perPixel, maxIterations, orbit,
+				);
+				const direct = directTile(
+					new Float32Array(size * size),
+					size, size,
+					toNumber(cx, prec) + dx0, toNumber(cy, prec) + dy0,
+					perPixel, maxIterations,
+				);
+
+				// The referee: every iteration in full precision, no shortcuts.
+				const exact = new Float32Array(size * size);
+				const rx = fromDecimalString(cxs, referee);
+				const ry = fromDecimalString(cys, referee);
+				const step = fromNumber(perPixel, referee);
+				const originX = rx + fromNumber(dx0, referee);
+				const originY = ry + fromNumber(dy0, referee);
+				for (let row = 0; row < size; row++) {
+					for (let col = 0; col < size; col++) {
+						exact[row * size + col] = exactEscape(
+							originX + BigInt(col) * step,
+							originY + BigInt(row) * step,
+							referee,
+							maxIterations,
+						);
+					}
+				}
+
+				return {
+					prec,
+					orbit,
+					orbitTime,
+					pixels: size * size,
+					perturbWrong: disagreement(perturbed, exact),
+					directWrong: disagreement(direct, exact),
+					agreement: 1 - disagreement(perturbed, direct),
+				};
+			}
+
+			const pct = (f) => (f * 100).toFixed(2) + '%';
+
+			{
+				// The opening view, where we still use plain doubles. The two
+				// paths have to agree here or the switch would be visible.
+				const r = survey({
+					cxs: '-0.6', cys: '0', perPixel: 0.0029,
+					maxIterations: 300, size: 24, referee: 128,
+				});
+				check(
+					'at the opening view both paths agree exactly',
+					r.agreement === 1 && r.directWrong === 0 && r.perturbWrong === 0,
+					`${r.pixels} px, agreement ${pct(r.agreement)}`,
+				);
+			}
+
+			{
+				// Deep enough that doubles are visibly struggling.
+				const r = survey({
+					cxs: '-0.743643887037151', cys: '0.131825904205330',
+					perPixel: 1e-11, maxIterations: 3000, size: 40,
+				});
+				check(
+					'perturbation stays accurate at 1e-11/px',
+					r.perturbWrong < 0.01,
+					`${r.pixels} px refereed · perturbation ${pct(r.perturbWrong)} wrong, ` +
+						`plain doubles ${pct(r.directWrong)}`,
+				);
+				check(
+					'and it beats plain doubles by a wide margin',
+					r.perturbWrong * 10 < r.directWrong,
+					`${(r.directWrong / Math.max(r.perturbWrong, 1e-9)).toFixed(0)}× fewer wrong pixels`,
+				);
+			}
+
+			{
+				// Past anything a double can address at all.
+				const r = survey({
+					cxs: '-1.7490863748149452878590942294057334028', cys: '0',
+					perPixel: 1e-24, maxIterations: 4000, size: 16,
+				});
+				check(
+					'perturbation matches exact BigInt at 1e-24/px',
+					r.perturbWrong === 0,
+					`${r.prec} bits, orbit of ${r.orbit.length} in ` +
+						`${r.orbitTime.toFixed(0)}ms, ${r.pixels} px refereed exactly`,
+				);
+			}
+
+			{
+				// Absurdly deep, to prove nothing structural breaks.
+				const r = survey({
+					cxs: '-1.749086374814945287859094229405733402857582100', cys: '0',
+					perPixel: 1e-60, maxIterations: 2500, size: 10, referee: 512,
+				});
+				check(
+					'perturbation matches exact BigInt at 1e-60/px',
+					r.perturbWrong === 0,
+					`${r.prec} bits, ~1e60× magnification, ${r.pixels} px refereed exactly`,
+				);
+			}
+
+			// -- state ------------------------------------------------------
+
+			note('— view state —');
+
+			{
+				const state = ViewState.initial(1600, 900);
+				let deepest = state;
+				for (let n = 0; n < 90; n++) {
+					deepest = deepest.clone().zoomTo({ x: 900, y: 500 }, 2, 1600, 900);
+				}
+				const url = 'https://example.com/?' + deepest.toSearchParams().toString();
+				const restored = ViewState.fromURL(url);
+
+				// Compare at the precision the URL actually claims to carry.
+				const digits = deepest.significantDigits;
+				const same =
+					restored &&
+					toDecimalString(restored.cx, restored.prec, digits) ===
+						toDecimalString(deepest.cx, deepest.prec, digits) &&
+					toDecimalString(restored.cy, restored.prec, digits) ===
+						toDecimalString(deepest.cy, deepest.prec, digits);
+
+				// …and that must be finer than a pixel by a healthy margin.
+				const carried = 10 ** -digits;
+				check(
+					'a 90-step zoom survives a URL round trip',
+					same && carried < deepest.perPixel / 1000,
+					`${deepest.prec} bits, ${digits} digits, ` +
+						`zoom ${deepest.magnification(1600).toExponential(1)}×`,
+				);
+				check('deep views select the perturbation path', deepest.deep === true);
+				check('the opening view uses plain doubles', state.deep === false);
+				check(
+					'raising iterations alone switches paths',
+					state.clone().setIterations(4000).deep === true,
+				);
+			}
+
+			{
+				const state = ViewState.initial(1600, 900);
+				const before = state.maxIterations;
+				state.zoomTo({ x: 800, y: 450 }, 2 ** 30, 1600, 900);
+				check(
+					'automatic iteration count climbs with depth',
+					state.maxIterations > before * 3,
+					`${before} → ${state.maxIterations}`,
+				);
+			}
+
+			// -- colour -----------------------------------------------------
+
+			note('— colour —');
+
+			const paint = (values, opts) => {
+				const image = new ImageData(values.length, 1);
+				colorize(values, image, { palette: 'classic', density: 1, offset: 0, ...opts });
+				return new Uint32Array(image.data.buffer);
+			};
+
+			{
+				const pixels = paint(new Float32Array([INTERIOR, 1, 12.5, 400, 9000]));
+				check(
+					'every pixel comes out opaque',
+					[...pixels].every((p) => p >>> 24 === 255),
+				);
+				check('interior pixels are black', pixels[0] === 0xff000000);
+				check(
+					'escape values map to distinct colours',
+					new Set([...pixels].slice(1)).size === 4,
+				);
+			}
+
+			{
+				// A wide range is left alone, so shallow views keep the look
+				// this program has always had.
+				const values = new Float32Array([2, 20, 90, 260]);
+				const plain = paint(values);
+				const ranged = paint(values, { range: { lo: 1, hi: 300 } });
+				check(
+					'a wide range is coloured exactly as before',
+					plain.every((p, i) => p === ranged[i]),
+				);
+			}
+
+			{
+				// A compressed range -- everything escaping at nearly the same
+				// count, which is what deep zoom looks like -- gets stretched.
+				// Distinct colours is the wrong measure here; two neighbouring
+				// palette entries count as distinct but look identical. What
+				// matters is how far apart the colours actually are.
+				const spread = (pixels) => {
+					let widest = 0;
+					for (let channel = 0; channel < 3; channel++) {
+						const bytes = [...pixels].map((p) => (p >>> (channel * 8)) & 0xff);
+						widest = Math.max(widest, Math.max(...bytes) - Math.min(...bytes));
+					}
+					return widest;
+				};
+
+				const values = new Float32Array([37900, 37950, 38000, 38050, 38100]);
+				const flat = spread(paint(values));
+				const stretched = spread(paint(values, { range: { lo: 37900, hi: 38100 } }));
+
+				check(
+					'a compressed range is nearly flat without stretching',
+					flat < 12,
+					`only ${flat}/255 of colour spread across 200 iterations`,
+				);
+				check(
+					'and opens right up with it',
+					stretched > 100,
+					`${stretched}/255 of colour spread, ${Math.round(stretched / flat)}× more`,
+				);
+			}
+
+			// -- end to end -------------------------------------------------
+
+			// Everything above calls the kernel directly. This drives the real
+			// thing: worker pool, session broadcast, tiling, colouring.
+
+			note('— end to end —');
+
+			{
+				const { Renderer } = await import('./src/render.js');
+				const surface = document.createElement('canvas');
+				const seen = [];
+				const renderer = new Renderer(surface, (e) => seen.push(e));
+				renderer.setSize(256, 192);
+				const ctx = surface.getContext('2d');
+
+				const distinctColors = () => {
+					const data = new Uint32Array(
+						ctx.getImageData(0, 0, 256, 192).data.buffer,
+					);
+					return new Set(data).size;
+				};
+
+				const shallow = ViewState.initial(256, 192);
+				await renderer.render(shallow);
+				check(
+					'a shallow frame renders through the worker pool',
+					seen.at(-1)?.type === 'done' && distinctColors() > 50,
+					`${renderer.workers} workers, ${distinctColors()} colours, ` +
+						`${seen.at(-1)?.elapsed.toFixed(0)}ms`,
+				);
+
+				seen.length = 0;
+				const deep = ViewState.fromURL(
+					'https://x/?x=-1.7490863748149452878590942294057334028&y=0' +
+						'&s=1e-24&i=2000&c=ultra',
+				);
+				await renderer.render(deep);
+				const phases = seen.filter((e) => e.type === 'phase').map((e) => e.phase);
+				check(
+					'a 1e24× frame renders through the worker pool',
+					seen.at(-1)?.type === 'done' && distinctColors() > 50,
+					`${distinctColors()} colours, ${seen.at(-1)?.elapsed.toFixed(0)}ms`,
+				);
+				check(
+					'the deep frame computed a reference orbit first',
+					phases[0] === 'reference' && phases[1] === 'tiles',
+					phases.join(' → '),
+				);
+
+				const before = distinctColors();
+				deep.palette = 'ember';
+				check(
+					'a palette change re-colours without recomputing',
+					renderer.recolor(deep) && distinctColors() !== before,
+				);
+
+				renderer.cancel();
+			}
+
+			document.getElementById('out').innerHTML =
+				lines.join('\n') +
+				`\n\n<span class="${failures ? 'fail' : 'pass'}">` +
+				`${failures ? failures + ' FAILED' : 'all checks passed'}</span>`;
+		</script>
+	</body>
+</html>
