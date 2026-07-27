@@ -1,27 +1,50 @@
-// Turns a ViewState into pixels on the canvas.
+// Turns a ViewState into pixels.
 //
-// A frame runs in two phases. If we're deep enough to need arbitrary
-// precision, one worker computes the reference orbit while the others wait --
-// that's the slow part, and the one worth putting a timer on. Then the frame
-// is cut into tiles and handed round the pool, each painted the moment it
-// lands so you can watch the picture arrive.
+// Nothing here touches the visible canvas. Frames are built in an off-screen
+// buffer and handed to the viewport, which decides when to show them. That
+// separation is what keeps the picture from twitching while it loads.
+//
+// A frame runs in three phases:
+//
+//   1. If we're deep enough to need arbitrary precision, one worker computes
+//      the reference orbit while the others wait. That's the slow part, and
+//      the one worth putting a timer on.
+//
+//   2. A probe: a postage-stamp version of the whole frame, just to learn what
+//      range of escape values is out there. The palette is pinned to it before
+//      any real pixel is coloured.
+//
+//   3. The frame proper, cut into tiles and shared round the pool.
 
 import { Cancelled, WorkerPool } from './pool.js';
 import { colorize } from './palette.js';
 
 const TILE_SIZE = 128;
 
+/** Width of the probe pass. Costs well under 1% of a frame. */
+const PROBE_WIDTH = 56;
+
+/** What we guess a frame will cost before we've ever timed one. */
+const DEFAULT_PREDICTION = 320;
+
 export class Renderer {
-	#canvas;
+	#buffer = document.createElement('canvas');
 	#ctx;
 	#pool;
 	#generation = 0;
 	#frame = null;
 	#emit;
 
-	constructor(canvas, onEvent) {
-		this.#canvas = canvas;
-		this.#ctx = canvas.getContext('2d', { alpha: false });
+	// Live timing, so the viewport can pace its animation against us.
+	#phase = 'idle';
+	#tilesBegan = 0;
+	#done = 0;
+	#total = 0;
+	#rate = null;
+	#complete = true;
+
+	constructor(onEvent) {
+		this.#ctx = this.#buffer.getContext('2d', { alpha: false });
 		this.#emit = onEvent;
 		this.#pool = new WorkerPool(
 			navigator.hardwareConcurrency || 4,
@@ -29,25 +52,73 @@ export class Renderer {
 		);
 	}
 
+	/** The off-screen canvas holding the frame being built. */
+	get surface() {
+		return this.#buffer;
+	}
+
 	get width() {
-		return this.#canvas.width;
+		return this.#buffer.width;
 	}
 
 	get height() {
-		return this.#canvas.height;
+		return this.#buffer.height;
 	}
 
 	get workers() {
 		return this.#pool.size;
 	}
 
-	/** Resize the backing store. Returns true if it actually changed. */
+	/**
+	 * Whether the buffer is finished. Tracked separately from the frame,
+	 * because during the reference and probe phases `#frame` still holds the
+	 * *previous* frame -- and reporting that one's completion would have the
+	 * viewport cross-fade to a buffer that hasn't been drawn yet.
+	 */
+	get complete() {
+		return this.#complete;
+	}
+
+	/** Resize the buffer. Returns true if it actually changed. */
 	setSize(width, height) {
-		if (this.#canvas.width === width && this.#canvas.height === height) return false;
-		this.#canvas.width = width;
-		this.#canvas.height = height;
+		if (this.#buffer.width === width && this.#buffer.height === height) return false;
+		this.#buffer.width = width;
+		this.#buffer.height = height;
 		this.#frame = null;
 		return true;
+	}
+
+	/**
+	 * Fill the buffer with a slice of another canvas, stretched to fit.
+	 *
+	 * The viewport uses this to lay down the outgoing frame, warped to the
+	 * incoming one's geometry, before any tile arrives. Tiles then land on
+	 * a background that already matches instead of on something stale.
+	 */
+	seedFrom(source, sx, sy, sw, sh) {
+		this.#ctx.fillStyle = '#000';
+		this.#ctx.fillRect(0, 0, this.width, this.height);
+		this.#ctx.drawImage(source, sx, sy, sw, sh, 0, 0, this.width, this.height);
+	}
+
+	// --- pacing -------------------------------------------------------------
+
+	/**
+	 * Rough guess at how long a frame will take, from how long recent ones
+	 * did. Only needs to be close enough to start an animation with; once
+	 * tiles start landing, remainingMs() takes over.
+	 */
+	predict(state) {
+		if (this.#rate === null) return DEFAULT_PREDICTION;
+		return this.width * this.height * state.maxIterations * this.#rate;
+	}
+
+	/** Milliseconds left, or null while it's too early to say. */
+	remainingMs() {
+		if (this.#phase === 'idle') return 0;
+		if (this.#done === 0) return null;
+		const perTile = (performance.now() - this.#tilesBegan) / this.#done;
+		return perTile * (this.#total - this.#done);
 	}
 
 	#tiles() {
@@ -71,6 +142,10 @@ export class Renderer {
 
 	cancel() {
 		this.#generation++;
+		this.#phase = 'idle';
+		// Whatever is in the buffer is what we've got; call it finished so the
+		// viewport stops waiting on it.
+		this.#complete = true;
 		this.#pool.reset();
 	}
 
@@ -81,6 +156,23 @@ export class Renderer {
 
 		const started = performance.now();
 		const { width, height } = this;
+		this.#phase = 'reference';
+		this.#done = 0;
+		this.#total = 0;
+		this.#complete = false;
+
+		// Only the plain-double path needs these; the perturbation path works
+		// from pixel offsets and never forms an absolute coordinate.
+		const x0 = state.centerX - (state.perPixel * width) / 2;
+		const y0 = state.centerY - (state.perPixel * height) / 2;
+
+		const common = {
+			type: 'tile',
+			x0,
+			y0,
+			maxIterations: state.maxIterations,
+			deep: state.deep,
+		};
 
 		if (state.deep) {
 			this.#emit({ type: 'phase', phase: 'reference', started });
@@ -101,9 +193,7 @@ export class Renderer {
 					},
 				);
 			} catch (error) {
-				if (error instanceof Cancelled) return;
-				this.#emit({ type: 'error', error });
-				return;
+				return this.#fail(error, stale());
 			}
 			if (stale()) return;
 			this.#pool.setSession({
@@ -116,51 +206,45 @@ export class Renderer {
 		}
 
 		const tiles = this.#tiles();
+		this.#phase = 'tiles';
+		this.#tilesBegan = performance.now();
+		this.#total = tiles.length;
 		this.#emit({ type: 'phase', phase: 'tiles', total: tiles.length, started });
 
-		const frame = {
-			width,
-			height,
-			tiles: [],
-			range: null,
-			complete: false,
-		};
+		// Probe first, so the palette is settled before anything is coloured.
+		let range = null;
+		try {
+			const probeHeight = Math.max(8, Math.round((PROBE_WIDTH * height) / width));
+			const probe = await this.#pool.run({
+				...common,
+				tile: { x: 0, y: 0, w: PROBE_WIDTH, h: probeHeight },
+				width: PROBE_WIDTH,
+				height: probeHeight,
+				perPixel: (state.perPixel * width) / PROBE_WIDTH,
+			});
+			if (Number.isFinite(probe.lo) && Number.isFinite(probe.hi)) {
+				range = { lo: probe.lo, hi: probe.hi };
+			}
+		} catch (error) {
+			return this.#fail(error, stale());
+		}
+		if (stale()) return;
+
+		const frame = { width, height, tiles: [], range, complete: false };
 		this.#frame = frame;
-
-		// Only needed by the plain-double path; the perturbation path works
-		// from pixel offsets and never forms an absolute coordinate.
-		const x0 = state.centerX - (state.perPixel * width) / 2;
-		const y0 = state.centerY - (state.perPixel * height) / 2;
-
-		let done = 0;
 
 		const jobs = tiles.map((tile) =>
 			this.#pool
-				.run({
-					type: 'tile',
-					tile,
-					width,
-					height,
-					x0,
-					y0,
-					perPixel: state.perPixel,
-					maxIterations: state.maxIterations,
-					deep: state.deep,
-				})
+				.run({ ...common, tile, width, height, perPixel: state.perPixel })
 				.then((result) => {
 					if (stale()) return;
 					const painted = { ...result.tile, data: result.data };
 					frame.tiles.push(painted);
-					if (this.#widenRange(frame, result.lo, result.hi)) {
-						// The palette just moved under the tiles already down.
-						for (const earlier of frame.tiles) this.#paint(earlier, state);
-					} else {
-						this.#paint(painted, state);
-					}
-					done++;
+					this.#paint(painted, state);
+					this.#done++;
 					this.#emit({
 						type: 'progress',
-						done,
+						done: this.#done,
 						total: tiles.length,
 						elapsed: performance.now() - started,
 					});
@@ -175,37 +259,25 @@ export class Renderer {
 		await Promise.all(jobs);
 		if (stale()) return;
 
-		// Tiles were painted as they arrived, against whatever the range was
-		// at the time. Small widenings don't trigger a repaint on their own,
-		// so they'd leave faint seams along tile edges. One final pass with
-		// the settled range puts the whole frame on the same footing.
 		frame.complete = true;
-		for (const tile of frame.tiles) this.#paint(tile, state);
+		this.#complete = true;
+		this.#phase = 'idle';
 
-		this.#emit({ type: 'done', elapsed: performance.now() - started });
+		const elapsed = performance.now() - started;
+		const cost = elapsed / (width * height * state.maxIterations);
+		this.#rate = this.#rate === null ? cost : this.#rate * 0.7 + cost * 0.3;
+
+		this.#emit({ type: 'done', elapsed });
 	}
 
-	/**
-	 * Widen the frame's range to include one tile's. Returns true when the
-	 * palette has stretched far enough that tiles already painted need doing
-	 * again -- a few percent, so it settles after the first handful of tiles
-	 * instead of flickering all the way down the frame.
-	 */
-	#widenRange(frame, lo, hi) {
-		if (!Number.isFinite(lo) || !Number.isFinite(hi)) return false;
-
-		const previous = frame.range;
-		if (!previous) {
-			frame.range = { lo, hi };
-			return frame.tiles.length > 1;
-		}
-
-		frame.range = { lo: Math.min(previous.lo, lo), hi: Math.max(previous.hi, hi) };
-		const span = Math.max(previous.hi - previous.lo, 1e-9);
-		return (
-			(previous.lo - frame.range.lo) / span > 0.03 ||
-			(frame.range.hi - previous.hi) / span > 0.03
-		);
+	#fail(error, alreadyStale) {
+		this.#phase = 'idle';
+		// Superseded frames leave `#complete` alone: the frame that replaced
+		// this one owns it now, and is still working.
+		if (alreadyStale) return;
+		this.#complete = true;
+		if (error instanceof Cancelled) return;
+		this.#emit({ type: 'error', error });
 	}
 
 	#paint(tile, state) {
@@ -227,33 +299,7 @@ export class Renderer {
 		return true;
 	}
 
-	/**
-	 * Stretch what's on screen to approximate where we're about to go, so the
-	 * canvas isn't stale or blank while the real frame computes.
-	 */
-	previewZoom(factor, focus) {
-		const { width, height } = this;
-		const sw = width / factor;
-		const sh = height / factor;
-		this.#ctx.drawImage(
-			this.#canvas,
-			focus.x - sw / 2,
-			focus.y - sh / 2,
-			sw,
-			sh,
-			0,
-			0,
-			width,
-			height,
-		);
-	}
-
-	previewPan(dx, dy) {
-		const { width, height } = this;
-		this.#ctx.drawImage(this.#canvas, dx, dy, width, height, 0, 0, width, height);
-	}
-
 	toBlob(type = 'image/png') {
-		return new Promise((resolve) => this.#canvas.toBlob(resolve, type));
+		return new Promise((resolve) => this.#buffer.toBlob(resolve, type));
 	}
 }

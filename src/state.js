@@ -101,6 +101,19 @@ export class ViewState {
 		return this.perPixel < DEEP_THRESHOLD || this.maxIterations > DEEP_ITERATIONS;
 	}
 
+	/**
+	 * How far this view's centre sits from another's, in plain units.
+	 * The centres may be hundreds of digits long, but the gap between two
+	 * views is never much bigger than a screen, so a double holds it fine.
+	 */
+	worldDelta(from) {
+		const prec = Math.max(this.prec, from.prec);
+		return {
+			x: toNumber(rescale(this.cx, this.prec, prec) - rescale(from.cx, from.prec, prec), prec),
+			y: toNumber(rescale(this.cy, this.prec, prec) - rescale(from.cy, from.prec, prec), prec),
+		};
+	}
+
 	get centerX() {
 		return toNumber(this.cx, this.prec);
 	}

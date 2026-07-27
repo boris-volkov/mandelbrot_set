@@ -4,6 +4,7 @@ import { toDecimalString } from './fixed.js';
 import { PALETTES } from './palette.js';
 import { Renderer } from './render.js';
 import { MIN_PER_PIXEL, ViewState } from './state.js';
+import { Viewport } from './view.js';
 
 /** How long a frame has to take before we bother you with a progress panel. */
 const PROGRESS_AFTER = 350;
@@ -25,7 +26,8 @@ let renderStarted = 0;
 let showTimer = null;
 let clockFrame = null;
 
-const renderer = new Renderer(canvas, onRenderEvent);
+const renderer = new Renderer(onRenderEvent);
+const viewport = new Viewport(canvas, renderer);
 
 // ---------------------------------------------------------------------------
 // Sizing
@@ -38,7 +40,7 @@ function fitCanvas() {
 	scale = Math.min(window.devicePixelRatio || 1, 2);
 	while (scale > 0.5 && cssWidth * cssHeight * scale * scale > MAX_PIXELS) scale -= 0.25;
 
-	return renderer.setSize(Math.round(cssWidth * scale), Math.round(cssHeight * scale));
+	return viewport.setSize(Math.round(cssWidth * scale), Math.round(cssHeight * scale));
 }
 
 /** Pointer position in canvas pixels, which is what the state works in. */
@@ -55,14 +57,22 @@ function devicePoint(event) {
 // ---------------------------------------------------------------------------
 
 let queued = false;
+let queuedAnimate = true;
 
-function schedule() {
+/**
+ * Coalesce rapid input into one frame's worth of work. If anything in the
+ * batch wants a straight cut -- a resize, say -- the whole batch cuts.
+ */
+function schedule({ animate = true } = {}) {
+	queuedAnimate = queued ? queuedAnimate && animate : animate;
 	if (queued) return;
 	queued = true;
 	requestAnimationFrame(() => {
 		queued = false;
+		const animating = queuedAnimate;
+		queuedAnimate = true;
 		updateReadout();
-		renderer.render(state);
+		viewport.go(state, { animate: animating });
 	});
 }
 
@@ -189,14 +199,12 @@ function zoomIn(point, factor = 2, push = true) {
 		flash('as deep as a double can carry the offsets');
 		return;
 	}
-	renderer.previewZoom(factor, point);
 	state.zoomTo(point, factor, renderer.width, renderer.height);
 	commit({ push });
 }
 
 function panBy(dx, dy) {
 	state.pan(dx, dy);
-	renderer.previewPan(dx, dy);
 	commit({ push: true });
 }
 
@@ -270,12 +278,7 @@ canvas.addEventListener(
 		const clamped = Math.max(0.25, Math.min(4, factor));
 		if (Math.abs(clamped - 1) < 0.001) return;
 
-		const point = devicePoint(event);
-		renderer.previewZoom(clamped, {
-			x: point.x + (renderer.width / 2 - point.x) / clamped,
-			y: point.y + (renderer.height / 2 - point.y) / clamped,
-		});
-		state.zoomBy(clamped, point, renderer.width, renderer.height);
+		state.zoomBy(clamped, devicePoint(event), renderer.width, renderer.height);
 		commit();
 	},
 	{ passive: false },
@@ -292,7 +295,6 @@ const actions = {
 	down: () => panBy(0, renderer.height / 10),
 	in: () => zoomIn({ x: renderer.width / 2, y: renderer.height / 2 }),
 	out: () => {
-		renderer.previewZoom(0.5, { x: renderer.width / 2, y: renderer.height / 2 });
 		state.zoomBy(0.5);
 		commit({ push: true });
 	},
@@ -332,7 +334,8 @@ const actions = {
 function recolor() {
 	history.replaceState(null, '', state.toURL());
 	updateReadout();
-	if (!renderer.recolor(state)) schedule();
+	if (renderer.recolor(state)) viewport.refresh();
+	else schedule({ animate: false });
 }
 
 document.querySelectorAll('#toolbar button').forEach((button) => {
@@ -429,11 +432,11 @@ let resizeTimer = null;
 window.addEventListener('resize', () => {
 	clearTimeout(resizeTimer);
 	resizeTimer = setTimeout(() => {
-		if (fitCanvas()) schedule();
+		if (fitCanvas()) schedule({ animate: false });
 	}, 150);
 });
 
 fitCanvas();
 state = ViewState.fromURL(window.location.href) ?? ViewState.initial(renderer.width, renderer.height);
 history.replaceState(null, '', state.toURL());
-schedule();
+schedule({ animate: false });

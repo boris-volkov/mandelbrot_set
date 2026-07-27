@@ -409,11 +409,10 @@
 
 			{
 				const { Renderer } = await import('./src/render.js');
-				const surface = document.createElement('canvas');
 				const seen = [];
-				const renderer = new Renderer(surface, (e) => seen.push(e));
+				const renderer = new Renderer((e) => seen.push(e));
 				renderer.setSize(256, 192);
-				const ctx = surface.getContext('2d');
+				const ctx = renderer.surface.getContext('2d');
 
 				const distinctColors = () => {
 					const data = new Uint32Array(
@@ -457,6 +456,142 @@
 				);
 
 				renderer.cancel();
+			}
+
+			// -- the zoom transition ----------------------------------------
+
+			note('— zoom transition —');
+
+			{
+				const { paceDuration } = await import('./src/view.js');
+
+				check(
+					'the move holds its guess until the render speaks up',
+					paceDuration(50, 300, null) === 300,
+				);
+				check(
+					'a slow render stretches the move to meet it',
+					paceDuration(100, 300, 600) > 600,
+					`300ms → ${paceDuration(100, 300, 600)}ms`,
+				);
+				check(
+					'a fast one never cuts it short',
+					paceDuration(100, 300, 5) === 300,
+				);
+				check(
+					'and a hopeless one stops stretching',
+					paceDuration(200, 300, 90_000) <= 1400,
+					`capped at ${paceDuration(200, 300, 90_000)}ms`,
+				);
+			}
+
+			{
+				const { sampleRect } = await import('./src/view.js');
+				const W = 800;
+				const H = 600;
+				const from = ViewState.initial(W, H);
+				const nothing = { x: 0, y: 0 };
+
+				const start = sampleRect(from, nothing, from.perPixel, 0, W, H);
+				check(
+					'the move starts as the whole frame',
+					start.x === 0 && start.y === 0 && start.w === W && start.h === H,
+				);
+
+				// Clicking a point should end up sampling a box centred on it,
+				// half the size. If this is off, the picture slides sideways as
+				// it zooms and the handover jumps.
+				const pixel = { x: 610, y: 180 };
+				const to = from.clone().zoomTo(pixel, 2, W, H);
+				const end = sampleRect(from, to.worldDelta(from), to.perPixel, 1, W, H);
+				check(
+					'and ends centred on the point you clicked',
+					Math.abs(end.x + end.w / 2 - pixel.x) < 1e-6 &&
+						Math.abs(end.y + end.h / 2 - pixel.y) < 1e-6 &&
+						Math.abs(end.w - W / 2) < 1e-6,
+					`box ${end.w.toFixed(0)}×${end.h.toFixed(0)} at ` +
+						`(${end.x.toFixed(1)}, ${end.y.toFixed(1)})`,
+				);
+
+				// No jumps along the way, or the zoom stutters.
+				let worst = 0;
+				let previous = start;
+				for (let i = 1; i <= 100; i++) {
+					const r = sampleRect(from, to.worldDelta(from), to.perPixel, i / 100, W, H);
+					worst = Math.max(worst, Math.abs(r.x - previous.x), Math.abs(r.w - previous.w));
+					previous = r;
+				}
+				check(
+					'and moves smoothly in between',
+					worst < W / 40,
+					`largest step ${worst.toFixed(2)}px of ${W}`,
+				);
+			}
+
+			{
+				// The whole point of the rewrite: a frame is assembled off-screen
+				// and only shown when the viewport says so.
+				const { Renderer } = await import('./src/render.js');
+				const { Viewport } = await import('./src/view.js');
+
+				// The viewport draws on requestAnimationFrame, which a browser
+				// stops running entirely in a background tab. Drive it off a
+				// timer instead so this page can be checked either way.
+				const realFrames = window.requestAnimationFrame;
+				window.requestAnimationFrame = (fn) => setTimeout(() => fn(performance.now()), 16);
+
+				const visible = document.createElement('canvas');
+				const renderer = new Renderer(() => {});
+				const viewport = new Viewport(visible, renderer);
+				viewport.setSize(320, 240);
+
+				const checksum = (canvas) => {
+					const d = new Uint32Array(
+						canvas.getContext('2d').getImageData(0, 0, 320, 240).data.buffer,
+					);
+					let h = 0;
+					for (let i = 0; i < d.length; i += 7) h = (h * 31 + d[i]) | 0;
+					return h;
+				};
+
+				/** Wait for the screen to catch up with the buffer. False if it never does. */
+				const settled = (budget = 15_000) =>
+					new Promise((resolve) => {
+						const deadline = performance.now() + budget;
+						const poll = () => {
+							if (renderer.complete && checksum(visible) === checksum(renderer.surface))
+								resolve(true);
+							else if (performance.now() > deadline) resolve(false);
+							else setTimeout(poll, 25);
+						};
+						poll();
+					});
+
+				const first = ViewState.initial(320, 240);
+				viewport.go(first, { animate: false });
+				const shown = await settled();
+				check('the first frame lands on screen', shown && checksum(visible) !== 0);
+
+				// Zoom somewhere expensive enough that the frame can't be instant.
+				const next = ViewState.fromURL(
+					'https://x/?x=-0.743643887037151&y=0.131825904205330&s=2e-9&i=4000',
+				);
+				viewport.go(next);
+				check(
+					'the buffer is seeded before a single tile arrives',
+					checksum(renderer.surface) !== 0,
+					'incoming tiles land on the outgoing frame, not on blank',
+				);
+
+				const arrived = await settled();
+				check('an animated zoom settles onto the finished frame', arrived);
+				check(
+					'the view it reports matches where it landed',
+					viewport.current().perPixel === next.perPixel,
+				);
+
+				renderer.cancel();
+				window.requestAnimationFrame = realFrames;
 			}
 
 			document.getElementById('out').innerHTML =

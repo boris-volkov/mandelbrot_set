@@ -76,6 +76,27 @@ The upshot: the readout tells you when it has switched from `double precision`
 to `perturbation`, and how many bits it's carrying. Renders that take a while
 get a timer and a progress bar, and can be stopped.
 
+## Getting there smoothly
+
+Frames are built off-screen and only shown when they're ready, which is what
+keeps the picture from twitching while it loads. Two things fall out of that.
+
+When you click to zoom, the outgoing frame is stretched toward the incoming one
+over a few hundred milliseconds, and the animation is *paced against the
+render* — if the new frame is going to be slow, the move stretches to meet it,
+so you arrive about when the pixels do. Before any of that starts, the buffer
+is seeded with the outgoing frame warped into the incoming frame's geometry.
+That seed is exactly what the animation shows at the moment it lands, so the
+handover is invisible; tiles then sharpen it in place rather than appearing out
+of nothing.
+
+The colours hold still too. The palette is stretched to the range of escape
+values in the frame, and that range used to be discovered as tiles arrived —
+which meant the whole image re-coloured under you, repeatedly, mid-render. Now
+a probe pass renders a postage-stamp version of the frame first, purely to
+learn the range, and the palette is pinned before a single real pixel is
+coloured. It costs well under 1% of a frame.
+
 `test.html` checks the arithmetic against a deliberately slow, obviously
 correct version that does every single iteration in full precision. At 1e-24
 and 1e-60 per pixel the fast path agrees with it exactly.
