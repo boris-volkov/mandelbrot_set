@@ -178,6 +178,13 @@ seam so the count is something you can check rather than read off a
 places colours in the same phase space `colorize()` does, so the strip
 can't say anything the picture itself doesn't.
 
+The axis underneath is labelled in *repeats elapsed* — it runs from the
+offset at the left edge to offset + repeats at the right, with a plain
+integer at every seam in between. That one scale carries both former
+numbers at once: the left label alone is the phase, the right label alone
+is where the frequency has gotten to by the far edge, and the two used to
+require doing `offset` and `density × stretch` in your head to compare.
+
 Within a frame, the palette was also being re-derived as tiles arrived, so the
 image re-coloured under you mid-render. It doesn't depend on the tiles at all
 now, so there is nothing left to re-derive.

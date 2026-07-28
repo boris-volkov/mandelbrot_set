@@ -203,6 +203,13 @@ function updateReadout() {
 	drawSpectrum();
 }
 
+/** Canvas text needs a real font stack; CSS custom properties don't reach it. */
+const MONO_FONT = 'ui-monospace, "SF Mono", "Cascadia Mono", "Courier New", monospace';
+
+/** Split of the strip's CSS height between the gradient and its axis. Keep in sync with #spectrum's height in style.css. */
+const SPECTRUM_GRADIENT_H = 16;
+const SPECTRUM_LABEL_H = 12;
+
 /**
  * A picture of the colouring function in place of the numbers for it.
  *
@@ -211,17 +218,26 @@ function updateReadout() {
  * strip. It's the palette laid flat and repeated -- count the copies and
  * that's the frequency, see where the pattern starts and that's the phase.
  *
- * The number of repeats shown is density × stretch, not density alone: it's
- * the *actual* multiplier being applied to the picture right now, including
- * the automatic depth-driven doubling from mapping() that bands ± doesn't
- * control directly. Showing density alone would make the strip lie about
- * what's on screen every time depth silently bumps the level.
+ * The axis makes both numbers literal instead of implied. It's labelled in
+ * *repeats elapsed*, which runs from the offset at the left edge to
+ * offset + cycles at the right -- so the left label alone is the phase, the
+ * right label alone is where frequency has gotten you to, and the labelled
+ * ticks in between are just "1", "2", "3", counting complete repeats as they
+ * pass. One axis, both quantities, nothing to compute in your head.
+ *
+ * The repeat count itself is density × stretch, not density alone: it's the
+ * *actual* multiplier being applied to the picture right now, including the
+ * automatic depth-driven doubling from mapping() that bands ± doesn't control
+ * directly. Showing density alone would make the axis lie about what's on
+ * screen every time depth silently bumps the level.
  */
 function drawSpectrum() {
 	const box = spectrumCanvas.getBoundingClientRect();
 	const width = Math.max(1, Math.round(box.width * scale));
+	const gradientH = Math.round(SPECTRUM_GRADIENT_H * scale);
+	const labelH = Math.round(SPECTRUM_LABEL_H * scale);
 	spectrumCanvas.width = width;
-	spectrumCanvas.height = Math.max(1, Math.round(22 * scale));
+	spectrumCanvas.height = gradientH + labelH;
 
 	const { stretch } = mapping(state.nominalIterations, state.density, state.offset);
 	const cycles = state.density * stretch;
@@ -233,7 +249,8 @@ function drawSpectrum() {
 	new Uint32Array(image.data.buffer).set(colours);
 	spectrumStripCtx.putImageData(image, 0, 0);
 
-	spectrumCtx.drawImage(spectrumStrip, 0, 0, width, spectrumCanvas.height);
+	spectrumCtx.clearRect(0, 0, width, spectrumCanvas.height);
+	spectrumCtx.drawImage(spectrumStrip, 0, 0, width, gradientH);
 
 	// One tick per full repeat, so the count in "cycles" is something you can
 	// verify by eye rather than take on faith. Skipped once they'd be closer
@@ -242,19 +259,49 @@ function drawSpectrum() {
 	// bright band and a dark one alike instead of vanishing into whichever
 	// palette happens to be showing.
 	const period = width / cycles;
-	if (period > 4) {
+	const startS = state.offset % 1;
+	const first = (1 - startS) * period;
+
+	if (period > 3 * scale) {
 		spectrumCtx.globalCompositeOperation = 'difference';
 		spectrumCtx.strokeStyle = '#fff';
 		spectrumCtx.lineWidth = Math.max(1, Math.round(scale));
-		const first = (1 - (state.offset % 1)) * period;
 		spectrumCtx.beginPath();
-		for (let x = first; x < width; x += period) {
+		for (let x = first; x < width - 2 * scale; x += period) {
 			const px = Math.round(x) + 0.5;
 			spectrumCtx.moveTo(px, 0);
-			spectrumCtx.lineTo(px, spectrumCanvas.height);
+			spectrumCtx.lineTo(px, gradientH);
 		}
 		spectrumCtx.stroke();
 		spectrumCtx.globalCompositeOperation = 'source-over';
+	}
+
+	// The axis text sits below the gradient, on the plain panel background, so
+	// it doesn't need the difference trick -- one legible colour is enough.
+	const inset = Math.round(2 * scale);
+	const labelY = gradientH + Math.round(2 * scale);
+	const fmt = (v) => (Math.abs(v - Math.round(v)) < 0.005 ? String(Math.round(v)) : v.toFixed(2));
+
+	spectrumCtx.font = `${Math.round(9 * scale)}px ${MONO_FONT}`;
+	spectrumCtx.fillStyle = '#7a8899';
+	spectrumCtx.textBaseline = 'top';
+
+	spectrumCtx.textAlign = 'left';
+	spectrumCtx.fillText(fmt(startS), inset, labelY);
+	spectrumCtx.textAlign = 'right';
+	spectrumCtx.fillText(fmt(startS + cycles), width - inset, labelY);
+
+	// Interior integers -- "1 repeat elapsed", "2 repeats elapsed" -- once
+	// there's room for them without either crowding each other or colliding
+	// with the two edge labels above.
+	if (period > 22 * scale) {
+		const edgeGuard = 20 * scale;
+		spectrumCtx.textAlign = 'center';
+		let n = 1;
+		for (let x = first; x < width - 2 * scale; x += period, n++) {
+			if (x < edgeGuard || x > width - edgeGuard) continue;
+			spectrumCtx.fillText(String(n), x, labelY);
+		}
 	}
 }
 

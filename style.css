@@ -85,7 +85,9 @@ body.hide-ui #progress {
 #spectrum {
 	display: block;
 	width: 100%;
-	height: 22px;
+	/* gradient (16px) + axis labels (12px) -- keep in sync with main.js's
+	   SPECTRUM_GRADIENT_H / SPECTRUM_LABEL_H */
+	height: 28px;
 	margin-top: 9px;
 	border-radius: 5px;
 	cursor: default;
