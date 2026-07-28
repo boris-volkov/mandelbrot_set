@@ -90,6 +90,14 @@ That seed is exactly what the animation shows at the moment it lands, so the
 handover is invisible; tiles then sharpen it in place rather than appearing out
 of nothing.
 
+The move runs at one speed throughout. Scale interpolates *geometrically* —
+zoom is multiplicative, so even travel through the exponent is even travel to
+the eye, where interpolating the scale itself would look like falling. Progress
+is carried from frame to frame rather than recomputed from the clock, because
+the duration gets revised upward mid-move once the render admits how slow it
+is, and `elapsed / duration` would then fall: the zoom used to visibly run
+backwards by a fifth of the move before jumping forward again.
+
 The colours hold still too, which took three goes to get right.
 
 `pow(nu, 0.4)` spreads escape counts over the palette nicely when they run from

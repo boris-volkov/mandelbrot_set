@@ -22,24 +22,43 @@ const MAX_MS = 1400;
 /** Cross-fade from the stretched frame to the sharp one, when it's ready in time. */
 const SETTLE_MS = 160;
 
-const smoothstep = (t) => t * t * (3 - 2 * t);
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+/**
+ * Shape of the move over time.
+ *
+ * Linear, so the zoom holds one speed from beginning to end. It reads as
+ * constant because sampleRect() interpolates the scale geometrically -- zoom
+ * is multiplicative, so even travel through the exponent is even travel to the
+ * eye. (Interpolating the scale itself would look like it was falling.)
+ *
+ * This used to be smoothstep, t*t*(3 - 2*t), which eases in and out. That is
+ * the right default for something that moves a short distance and stops, but
+ * here it reads as the zoom winding up, and there is nothing to ease into: the
+ * end of the move is a cross-fade, not a halt. For a gentler landing without
+ * the wind-up, ease out only: 1 - (1 - t)**2.
+ */
+const ease = (t) => t;
 
 /**
  * How long the move should take, revised as the render reveals its own pace.
  *
- * This is the bit that makes the zoom land as the pixels do. We only ever
- * stretch, never cut short -- shortening would make the picture lurch -- and
- * we stop stretching at MAX_MS, because past a second and a half a slow frame
- * should let you look at something rather than creep toward it.
+ * This is the bit that makes the zoom land as the pixels do. Expressed as a
+ * total duration for the whole move, so `progress` has to be folded in: what
+ * we actually want is for the part still to come to take as long as the render
+ * has left. We only ever stretch, never cut short -- shortening would make the
+ * picture lurch -- and we stop at MAX_MS, because past a second and a half a
+ * slow frame should let you look at something rather than creep towards it.
  *
- * @param elapsed   ms since the move began
+ * @param progress  how much of the move is already done, 0 to 1
  * @param duration  what we're currently aiming for
  * @param remaining ms of rendering left, or null while it's too early to say
  */
-export function paceDuration(elapsed, duration, remaining) {
+export function paceDuration(progress, duration, remaining) {
 	if (remaining === null) return duration;
-	const wanted = elapsed + remaining + SETTLE_MS;
+	const left = 1 - progress;
+	if (left <= 0) return duration;
+	const wanted = (remaining + SETTLE_MS) / left;
 	return wanted > duration ? Math.min(wanted, MAX_MS) : duration;
 }
 
@@ -94,10 +113,11 @@ export class Viewport {
 	 * "where we're going" end up being the same thing.
 	 */
 	current() {
+		if (!this.#target) return null; // nothing shown yet
 		const move = this.#move;
 		if (!move || move.landed) return this.#target.clone();
 
-		const p = smoothstep(clamp((performance.now() - move.start) / move.duration, 0, 1));
+		const p = ease(move.progress);
 		const view = move.from.clone();
 		view.perPixel = move.from.perPixel * Math.pow(this.#target.perPixel / move.from.perPixel, p);
 		view.cx += fromNumber(move.delta.x * p, view.prec);
@@ -112,7 +132,7 @@ export class Viewport {
 	 * very first frame -- and it cuts straight to rendering.
 	 */
 	go(target, { animate = true } = {}) {
-		const from = this.#target ? this.current() : null;
+		const from = this.current();
 
 		// Take our own copy. The caller navigates by mutating a single state
 		// object in place, so holding a reference to it would mean `from` and
@@ -145,7 +165,13 @@ export class Viewport {
 					? {
 							from,
 							delta,
-							start: performance.now(),
+							// Progress is carried, not recomputed from the clock.
+							// The duration gets revised upward mid-move once the
+							// render says how slow it will be, and elapsed/duration
+							// would then *fall* -- the zoom visibly ran backwards
+							// by a fifth of the move before jumping forward again.
+							progress: 0,
+							lastTick: performance.now(),
 							duration: clamp(this.#renderer.predict(view), MIN_MS, MAX_MS),
 							landed: false,
 							settleFrom: null,
@@ -201,14 +227,20 @@ export class Viewport {
 
 		if (move && !move.landed) {
 			move.duration = paceDuration(
-				now - move.start,
+				move.progress,
 				move.duration,
 				this.#renderer.remainingMs(),
 			);
 
-			const p = (now - move.start) / move.duration;
-			if (p < 1) {
-				this.#drawStretched(smoothstep(p));
+			// Advance by however long the last frame actually took. Revising the
+			// duration now changes only the speed from here on; it can never
+			// walk the picture backwards.
+			const step = Math.max(0, now - move.lastTick);
+			move.lastTick = now;
+			move.progress = Math.min(1, move.progress + step / move.duration);
+
+			if (move.progress < 1) {
+				this.#drawStretched(ease(move.progress));
 				this.#run();
 				return;
 			}

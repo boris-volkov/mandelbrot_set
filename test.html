@@ -497,21 +497,39 @@
 
 				check(
 					'the move holds its guess until the render speaks up',
-					paceDuration(50, 300, null) === 300,
+					paceDuration(0.2, 300, null) === 300,
 				);
 				check(
 					'a slow render stretches the move to meet it',
-					paceDuration(100, 300, 600) > 600,
-					`300ms → ${paceDuration(100, 300, 600)}ms`,
+					paceDuration(0.3, 300, 600) > 600,
+					`300ms → ${Math.round(paceDuration(0.3, 300, 600))}ms`,
 				);
-				check(
-					'a fast one never cuts it short',
-					paceDuration(100, 300, 5) === 300,
-				);
+				check('a fast one never cuts it short', paceDuration(0.3, 300, 5) === 300);
 				check(
 					'and a hopeless one stops stretching',
-					paceDuration(200, 300, 90_000) <= 1400,
-					`capped at ${paceDuration(200, 300, 90_000)}ms`,
+					paceDuration(0.5, 300, 90_000) <= 1400,
+					`capped at ${paceDuration(0.5, 300, 90_000)}ms`,
+				);
+
+				// The move must never run backwards. It used to: progress was
+				// elapsed/duration, and the duration is revised upward the moment
+				// the render admits how slow it is, so progress fell off a cliff
+				// and the zoom visibly reversed before picking up again.
+				let progress = 0;
+				let duration = 300;
+				let last = 0;
+				let worstReversal = 0;
+				for (let now = 0, previous = 0; now <= 900; previous = now, now += 50) {
+					const remaining = now < 150 ? null : Math.max(0, 900 - (now - 150) * 0.6);
+					duration = paceDuration(progress, duration, remaining);
+					progress = Math.min(1, progress + (now - previous) / duration);
+					worstReversal = Math.min(worstReversal, progress - last);
+					last = progress;
+				}
+				check(
+					'and the move never runs backwards while it is stretched',
+					worstReversal >= 0 && progress > 0,
+					`worst step ${worstReversal.toFixed(3)}, reached ${progress.toFixed(2)}`,
 				);
 			}
 
@@ -543,18 +561,30 @@
 						`(${end.x.toFixed(1)}, ${end.y.toFixed(1)})`,
 				);
 
-				// No jumps along the way, or the zoom stutters.
+				// No jumps along the way, or the zoom stutters. And the steps
+				// should be even: scale interpolates geometrically, so equal
+				// steps in the parameter are equal steps to the eye. If this
+				// ever fails with a large ratio, something has reintroduced
+				// easing, or started interpolating the scale itself.
 				let worst = 0;
+				let smallest = Infinity;
 				let previous = start;
 				for (let i = 1; i <= 100; i++) {
 					const r = sampleRect(from, to.worldDelta(from), to.perPixel, i / 100, W, H);
-					worst = Math.max(worst, Math.abs(r.x - previous.x), Math.abs(r.w - previous.w));
+					const step = Math.abs(r.w - previous.w);
+					worst = Math.max(worst, Math.abs(r.x - previous.x), step);
+					smallest = Math.min(smallest, step);
 					previous = r;
 				}
 				check(
 					'and moves smoothly in between',
 					worst < W / 40,
 					`largest step ${worst.toFixed(2)}px of ${W}`,
+				);
+				check(
+					'at an even pace, not winding up',
+					worst / smallest < 10,
+					`fastest step is ${(worst / smallest).toFixed(1)}× the slowest`,
 				);
 			}
 
