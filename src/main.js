@@ -1,7 +1,7 @@
 // Wiring: input, history, the readout, and the timer.
 
 import { toDecimalString } from './fixed.js';
-import { mapping, PALETTES, spectrum } from './palette.js';
+import { iterationsAt, mapping, PALETTES, repeatsAcross, spectrum } from './palette.js';
 import { Renderer } from './render.js';
 import { MIN_PER_PIXEL, ViewState } from './state.js';
 import { Viewport } from './view.js';
@@ -107,10 +107,13 @@ function onRenderEvent(event) {
 
 		case 'iterations':
 			// The renderer measured what this view actually needs. Keep it, so
-			// the readout and the URL say what was drawn.
+			// the readout and the URL say what was drawn -- and redraw the
+			// spectrum, whose axis now runs 0 to this exact number and was
+			// still showing the pre-render guess until this fires.
 			state.maxIterations = event.value;
 			$('iter').textContent = `${event.value.toLocaleString()} (auto)`;
 			history.replaceState(null, '', state.toURL());
+			drawSpectrum();
 			break;
 
 		case 'reference-progress':
@@ -210,6 +213,16 @@ const MONO_FONT = 'ui-monospace, "SF Mono", "Cascadia Mono", "Courier New", mono
 const SPECTRUM_GRADIENT_H = 16;
 const SPECTRUM_LABEL_H = 12;
 
+/** Minimum room a labelled interior tick needs, in CSS px, before it's skipped as clutter. */
+const SPECTRUM_LABEL_MIN_PERIOD = 40;
+
+/** Shortest legible form of an escape count: "0" .. "38.2k" .. "199k". */
+function formatNu(n) {
+	if (n < 1000) return String(Math.round(n));
+	const k = n / 1000;
+	return (k < 10 ? k.toFixed(1) : String(Math.round(k))) + 'k';
+}
+
 /**
  * A picture of the colouring function in place of the numbers for it.
  *
@@ -218,18 +231,27 @@ const SPECTRUM_LABEL_H = 12;
  * strip. It's the palette laid flat and repeated -- count the copies and
  * that's the frequency, see where the pattern starts and that's the phase.
  *
- * The axis makes both numbers literal instead of implied. It's labelled in
- * *repeats elapsed*, which runs from the offset at the left edge to
- * offset + cycles at the right -- so the left label alone is the phase, the
- * right label alone is where frequency has gotten you to, and the labelled
- * ticks in between are just "1", "2", "3", counting complete repeats as they
- * pass. One axis, both quantities, nothing to compute in your head.
+ * The axis is escape count -- the actual input to the function, 0 on the
+ * left to this frame's iteration cap on the right -- not pixel position and
+ * not an abstract repeat index. It isn't spaced evenly in iterations, though:
+ * it's spaced evenly in curve(nu), the same pow(nu, 0.4) colorize() applies,
+ * so a fixed slice of the axis always carries a fixed slice of palette. Equal
+ * spacing in raw iterations would do the opposite of what a graph is for --
+ * it would cram every band into the first sliver near nu=0 and leave the
+ * remaining nine-tenths of the strip a single near-solid colour, because
+ * that's how badly the curve flattens at high nu. iterationsAt() is exactly
+ * the label that belongs at a given x once the *drawing* is laid out this
+ * way: what escape count is really at this position.
  *
- * The repeat count itself is density × stretch, not density alone: it's the
- * *actual* multiplier being applied to the picture right now, including the
- * automatic depth-driven doubling from mapping() that bands ± doesn't control
- * directly. Showing density alone would make the axis lie about what's on
- * screen every time depth silently bumps the level.
+ * The repeat count -- how many times the palette actually wraps between 0 and
+ * the cap -- comes from repeatsAcross(), not from density × stretch. Those
+ * aren't the same number: stretch is keyed to *depth* (nominalIterations) on
+ * purpose, so the colours don't get thrown around by the measured count, but
+ * that means it doesn't answer "how many bands will I actually see" -- the
+ * picture's real pixels range up to whatever iteration count was actually
+ * measured, which can be tens of times the depth guess. repeatsAcross() reads
+ * off the real cap, so the tick count on screen matches the bands you'd
+ * actually count in the picture.
  */
 function drawSpectrum() {
 	const box = spectrumCanvas.getBoundingClientRect();
@@ -239,8 +261,9 @@ function drawSpectrum() {
 	spectrumCanvas.width = width;
 	spectrumCanvas.height = gradientH + labelH;
 
-	const { stretch } = mapping(state.nominalIterations, state.density, state.offset);
-	const cycles = state.density * stretch;
+	const cap = Math.max(1, state.maxIterations);
+	const { scale: paletteScale } = mapping(state.nominalIterations, state.density, state.offset);
+	const cycles = repeatsAcross(cap, paletteScale);
 
 	spectrumStrip.width = width;
 	spectrumStrip.height = 1;
@@ -252,12 +275,14 @@ function drawSpectrum() {
 	spectrumCtx.clearRect(0, 0, width, spectrumCanvas.height);
 	spectrumCtx.drawImage(spectrumStrip, 0, 0, width, gradientH);
 
-	// One tick per full repeat, so the count in "cycles" is something you can
-	// verify by eye rather than take on faith. Skipped once they'd be closer
-	// together than a few pixels -- past that they'd just be noise. Drawn with
-	// a difference blend rather than a fixed colour, so a tick reads against a
+	// One tick per full repeat, so the count is something you can verify by
+	// eye rather than take on faith. Skipped once they'd be closer together
+	// than a few pixels -- past that they'd just be noise. Drawn with a
+	// difference blend rather than a fixed colour, so a tick reads against a
 	// bright band and a dark one alike instead of vanishing into whichever
-	// palette happens to be showing.
+	// palette happens to be showing. Offset still shifts where these fall --
+	// it doesn't change what range of nu is on the axis, only which colour
+	// from the palette lands on which part of it.
 	const period = width / cycles;
 	const startS = state.offset % 1;
 	const first = (1 - startS) * period;
@@ -280,27 +305,24 @@ function drawSpectrum() {
 	// it doesn't need the difference trick -- one legible colour is enough.
 	const inset = Math.round(2 * scale);
 	const labelY = gradientH + Math.round(2 * scale);
-	const fmt = (v) => (Math.abs(v - Math.round(v)) < 0.005 ? String(Math.round(v)) : v.toFixed(2));
 
 	spectrumCtx.font = `${Math.round(9 * scale)}px ${MONO_FONT}`;
 	spectrumCtx.fillStyle = '#7a8899';
 	spectrumCtx.textBaseline = 'top';
 
 	spectrumCtx.textAlign = 'left';
-	spectrumCtx.fillText(fmt(startS), inset, labelY);
+	spectrumCtx.fillText('0', inset, labelY);
 	spectrumCtx.textAlign = 'right';
-	spectrumCtx.fillText(fmt(startS + cycles), width - inset, labelY);
+	spectrumCtx.fillText(formatNu(cap), width - inset, labelY);
 
-	// Interior integers -- "1 repeat elapsed", "2 repeats elapsed" -- once
-	// there's room for them without either crowding each other or colliding
-	// with the two edge labels above.
-	if (period > 22 * scale) {
-		const edgeGuard = 20 * scale;
+	// Interior labels, once there's room for them without crowding each other
+	// or the two edge labels above.
+	if (period > SPECTRUM_LABEL_MIN_PERIOD * scale) {
+		const edgeGuard = 24 * scale;
 		spectrumCtx.textAlign = 'center';
-		let n = 1;
-		for (let x = first; x < width - 2 * scale; x += period, n++) {
+		for (let x = first; x < width - 2 * scale; x += period) {
 			if (x < edgeGuard || x > width - edgeGuard) continue;
-			spectrumCtx.fillText(String(n), x, labelY);
+			spectrumCtx.fillText(formatNu(iterationsAt(x / width, cap)), x, labelY);
 		}
 	}
 }

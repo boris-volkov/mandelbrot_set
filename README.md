@@ -178,12 +178,25 @@ seam so the count is something you can check rather than read off a
 places colours in the same phase space `colorize()` does, so the strip
 can't say anything the picture itself doesn't.
 
-The axis underneath is labelled in *repeats elapsed* — it runs from the
-offset at the left edge to offset + repeats at the right, with a plain
-integer at every seam in between. That one scale carries both former
-numbers at once: the left label alone is the phase, the right label alone
-is where the frequency has gotten to by the far edge, and the two used to
-require doing `offset` and `density × stretch` in your head to compare.
+The axis underneath is labelled in escape count — 0 on the left, this
+frame's iteration cap on the right, since that's the function's actual
+input. It isn't spaced evenly in iterations, though: it's spaced evenly in
+`curve(nu)`, the same `pow(nu, 0.4)` `colorize()` applies, so a fixed
+slice of the axis always carries a fixed slice of palette. Spacing it
+evenly in raw iterations would do the opposite of what a graph is for —
+that curve flattens so hard at high nu that almost the whole strip would
+land in the last few bands, cramming everything interesting into a sliver
+near zero. `iterationsAt()` inverts the curve to label each position with
+the escape count really sitting there.
+
+The repeat count itself comes from `repeatsAcross()`, not from
+`density × stretch` — those aren't the same number. Stretch is keyed to
+*depth* on purpose, so the colours don't get thrown around by the
+measured iteration count, but that means it doesn't answer "how many
+bands will I actually see": real pixels range up to whatever count was
+actually measured for this view, which can be tens of times the depth
+guess. `repeatsAcross()` reads off the real cap instead, so the tick
+count on the axis matches the bands you'd actually count in the picture.
 
 Within a frame, the palette was also being re-derived as tiles arrived, so the
 image re-coloured under you mid-render. It doesn't depend on the tiles at all

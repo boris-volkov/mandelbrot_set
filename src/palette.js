@@ -115,7 +115,10 @@ const REFERENCE_ITERATIONS = 800;
  */
 const FLATTENING = 0.6;
 
-const curve = (nu) => Math.pow(nu > 0 ? nu : 0, 0.4);
+/** Escape counts crowd near the boundary; this is the curve that undoes that. */
+const CURVE_EXPONENT = 0.4;
+
+const curve = (nu) => Math.pow(nu > 0 ? nu : 0, CURVE_EXPONENT);
 
 /**
  * Work out how escape values map onto the palette.
@@ -156,6 +159,39 @@ export function mapping(maxIterations, density = 1, offset = 0) {
 		scale: ((LUT_SIZE * density) / TAU) * stretch,
 		shift: offset * LUT_SIZE,
 	};
+}
+
+/**
+ * How many times the palette actually repeats across escape values from 0 to
+ * `maxIterations`, at a given `scale`.
+ *
+ * Not the same question as mapping()'s `stretch`. Stretch is keyed to depth
+ * (nominalIterations) on purpose, so the colours don't get thrown around by
+ * the measured count -- but that means it doesn't answer "how many bands will
+ * I actually see", because the picture's real pixels range up to whatever
+ * iteration count was actually measured for this view, which can be a long
+ * way from the depth guess. This is the literal count for the range that's
+ * really on screen: exact, because it's the same curve(nu)*scale colorize()
+ * uses, just evaluated at the one nu that matters -- the cap.
+ */
+export function repeatsAcross(maxIterations, scale) {
+	return (curve(maxIterations) * scale) / LUT_SIZE;
+}
+
+/**
+ * The escape count that sits `fraction` of the way from 0 to `maxIterations`
+ * *in the palette's own space* -- i.e. the nu whose curve(nu) is `fraction`
+ * of the way from curve(0) to curve(maxIterations). Answers "what iteration
+ * count is at this x position" for a strip drawn linearly in that space,
+ * which is what spectrum() does and what makes its bands evenly spaced.
+ *
+ * A closed form, not a search: curve is a pure power law, so its inverse is
+ * one too, and the two exponents cancel the density/offset/scale out of it
+ * entirely -- this position depends only on the cap, never on how the
+ * picture happens to be coloured.
+ */
+export function iterationsAt(fraction, maxIterations) {
+	return Math.pow(Math.max(0, fraction), 1 / CURVE_EXPONENT) * maxIterations;
 }
 
 /**

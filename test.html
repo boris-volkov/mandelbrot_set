@@ -420,6 +420,106 @@
 			}
 
 			{
+				// repeatsAcross/iterationsAt are what let the spectrum strip's
+				// x-axis read in real escape counts. Both are closed forms, not
+				// searches, so they're checkable directly against the algebra
+				// they're supposed to implement.
+				const { iterationsAt, mapping, repeatsAcross } = await import('./src/palette.js');
+
+				check(
+					'iterationsAt spans exactly 0 to the cap',
+					iterationsAt(0, 12345) === 0 &&
+						Math.abs(iterationsAt(1, 12345) - 12345) < 1e-6,
+					'fraction 0 and 1 land on the two ends',
+				);
+
+				const mid = iterationsAt(0.5, 10000);
+				check(
+					'and is monotonic, weighted toward the high end',
+					mid > 0 &&
+						mid < 10000 &&
+						// the curve flattens at high nu, so equal steps in the
+						// palette's own space cover a *larger* stretch of nu once
+						// you're already partway across -- the second half must
+						// span more escape counts than the first.
+						10000 - mid > mid,
+					`fraction 0.5 → nu ${mid.toFixed(0)} (past the midpoint, as the flattening predicts)`,
+				);
+
+				// repeatsAcross should be exactly linear in scale (double the
+				// scale, double the repeat count) and follow the curve's own
+				// exponent in the cap (curve(nu) = nu^0.4, so doubling the cap
+				// multiplies repeats by 2^0.4) -- checking the relationship
+				// rather than hardcoding palette.js's private LUT size.
+				const probeScale = mapping(3000, 1.4, 0.1).scale;
+				const r1 = repeatsAcross(20000, probeScale);
+				const r2 = repeatsAcross(20000, probeScale * 2);
+				const r3 = repeatsAcross(40000, probeScale);
+				check(
+					'repeatsAcross is linear in scale and follows the curve in the cap',
+					Math.abs(r2 / r1 - 2) < 1e-9 && Math.abs(r3 / r1 - 2 ** 0.4) < 1e-6,
+					`×2 scale → ×${(r2 / r1).toFixed(3)} repeats; ×2 cap → ×${(r3 / r1).toFixed(3)} repeats`,
+				);
+
+				// The number that actually matters: repeatsAcross must track the
+				// *measured* iteration cap, and can differ hugely from what
+				// density × stretch alone would say once that cap has drifted far
+				// from the depth guess -- exactly the antenna-view case that
+				// motivated measuring iterations at all.
+				const guessScale = mapping(4653, 1, 0);
+				const oldGuess = 1 * guessScale.stretch;
+				const real = repeatsAcross(119264, guessScale.scale);
+				check(
+					'and that gap can be large -- this is the point of the fix',
+					real > oldGuess * 5,
+					`density×stretch said ×${oldGuess}; the real count is ×${real.toFixed(0)}`,
+				);
+			}
+
+			{
+				// The strip and the real renderer must agree pixel for pixel: the
+				// colour spectrum() draws at a given x, using repeatsAcross() for
+				// its cycle count, has to be the exact colour colorize() would
+				// give a real pixel whose escape value is iterationsAt(x/width).
+				// If these ever drift apart, the axis would be lying about what
+				// the picture on screen actually contains.
+				const { iterationsAt, mapping, repeatsAcross, spectrum } =
+					await import('./src/palette.js');
+
+				const width = 400;
+				const cap = 26311;
+				const nominalIterations = 5000;
+				const density = 1.6;
+				const offset = 0.37;
+				const palette = 'ultra';
+
+				const { scale } = mapping(nominalIterations, density, offset);
+				const cycles = repeatsAcross(cap, scale);
+				const strip = spectrum(width, { palette, cycles, offset });
+
+				let worst = 0;
+				const samples = [0, 0.1, 0.25, 0.42, 0.5, 0.73, 0.9, 0.999];
+				for (const f of samples) {
+					const x = Math.round(f * (width - 1));
+					const nu = iterationsAt(x / width, cap);
+					const real = new ImageData(1, 1);
+					colorize(new Float32Array([nu]), real, {
+						palette,
+						density,
+						offset,
+						maxIterations: nominalIterations,
+					});
+					const realPixel = new Uint32Array(real.data.buffer)[0];
+					if (realPixel !== strip[x]) worst++;
+				}
+				check(
+					'the axis labels match what the real renderer would draw there',
+					worst === 0,
+					`checked ${samples.length} positions against colorize() directly, ${worst} mismatched`,
+				);
+			}
+
+			{
 				// The spectrum strip is the graphical stand-in for "bands" and
 				// "shift": count the repeats, see where the pattern starts. It has
 				// to actually repeat the right number of times and start in the
