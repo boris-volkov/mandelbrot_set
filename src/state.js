@@ -53,9 +53,25 @@ export const MIN_PER_PIXEL = 1e-295;
 
 const MAX_ITERATIONS = 200_000;
 
+/**
+ * How many iterations to spend at a given scale.
+ *
+ * The shape is guesswork -- what a frame really needs depends on what's in it,
+ * which you can't know before rendering it -- but the *level* was measured. It
+ * used to run about one press of the iteration button (1.5x) richer than any
+ * frame could use. Across the opening view and zooms of 1e3, 1e6, 1e12 and
+ * 1e21, raising the count by 1.5x changed at most 0.8% of pixels and usually
+ * none at all, so none of them were short; dropping it by 1.5x changed 0.1% or
+ * less almost everywhere. That headroom is pure waiting, so it's gone.
+ *
+ * There is often more slack than that once you're deep -- at 1e21 the count can
+ * be cut by 3.4x with no pixel changing at all -- but how much depends on where
+ * you are, and coming up short shows as black blobs where detail belongs. One
+ * click is the part that was safe everywhere.
+ */
 function autoIterationsFor(perPixel) {
 	const decades = Math.max(0, Math.log10(REFERENCE_SCALE / perPixel));
-	return Math.min(MAX_ITERATIONS, Math.round(300 + 200 * Math.pow(decades, 1.45)));
+	return Math.min(MAX_ITERATIONS, Math.round(200 + 135 * Math.pow(decades, 1.45)));
 }
 
 export class ViewState {

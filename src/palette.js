@@ -100,8 +100,13 @@ function lutFor(name) {
 /**
  * Iteration limit the palette is tuned around: at this many, it doesn't
  * stretch at all and the mapping is the one this program has always used.
+ *
+ * Tied to the automatic iteration count, so it moved with it when that was
+ * trimmed by 1.5x. The palette is really keyed to *depth*; iterations are the
+ * stand-in. Had this stayed put, trimming the count would have quietly dropped
+ * some views a colour level for no reason connected to how they look.
  */
-const REFERENCE_ITERATIONS = 1200;
+const REFERENCE_ITERATIONS = 800;
 
 /**
  * How the curve's flattening is undone. pow(nu, 0.4) has slope 0.4·nu^-0.6, so

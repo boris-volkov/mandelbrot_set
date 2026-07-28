@@ -76,6 +76,16 @@ The upshot: the readout tells you when it has switched from `double precision`
 to `perturbation`, and how many bits it's carrying. Renders that take a while
 get a timer and a progress bar, and can be stopped.
 
+The iteration count climbs with depth on its own, and how far it climbs was
+measured rather than guessed. Across the opening view and zooms of 1e3, 1e6,
+1e12 and 1e21, raising it by 1.5× changed at most 0.8% of pixels and usually
+none — so none of those frames were short of iterations — while lowering it by
+1.5× changed 0.1% or less almost everywhere. That was a click's worth of pure
+waiting, so it's gone. There's often more slack once you're deep (at 1e21 the
+count can be cut by 3.4× without a single pixel changing), but how much depends
+on where you are, and coming up short shows as black where detail belongs. `a`
+turns the automatic count off; `+` and `−` set it by hand.
+
 ## Getting there smoothly
 
 Frames are built off-screen and only shown when they're ready, which is what
