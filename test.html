@@ -485,6 +485,45 @@
 					renderer.recolor(deep) && distinctColors() !== before,
 				);
 
+				// The iteration limit is measured per view, because no function
+				// of depth can predict it: at one fixed scale the honest answer
+				// ran from 400 to 27,750 depending only on where you pointed.
+				// The reported view is the hungry case -- at the depth curve's
+				// guess of 4,653 its centre is a black void where a whole
+				// mini-Mandelbrot lives.
+				const hungry = ViewState.fromURL(
+					'https://x/?x=-1.50214936955402554984&y=0.00000000000020391442' +
+						'&s=2.139988e-14&a=1',
+				);
+				const easy = ViewState.fromURL(
+					'https://x/?x=-1.7490863748149452878590942294057334028&y=0&s=1e-12&a=1',
+				);
+				const guessed = hungry.nominalIterations;
+
+				seen.length = 0;
+				await renderer.render(hungry);
+				const forHungry = seen.find((e) => e.type === 'iterations')?.value;
+
+				seen.length = 0;
+				await renderer.render(easy);
+				const forEasy = seen.find((e) => e.type === 'iterations')?.value;
+
+				check(
+					'a starved view gets its iteration limit raised',
+					forHungry > guessed * 2,
+					`depth guessed ${guessed}, measured ${forHungry}`,
+				);
+				check(
+					'and an easy one at the same depth gets it cut',
+					forEasy < easy.nominalIterations / 4,
+					`depth guessed ${easy.nominalIterations}, measured ${forEasy}`,
+				);
+				check(
+					'so the count follows the view, not the depth',
+					forHungry > forEasy * 10,
+					`${forHungry} against ${forEasy} — ${Math.round(forHungry / forEasy)}× apart`,
+				);
+
 				renderer.cancel();
 			}
 
@@ -497,39 +536,72 @@
 
 				check(
 					'the move holds its guess until the render speaks up',
-					paceDuration(0.2, 300, null) === 300,
+					paceDuration(50, 300, null) === 300,
 				);
+				// It eases towards the estimate rather than snapping, because the
+				// estimate is noisy early on. Applied repeatedly it should get
+				// there: 300ms in with 600ms left wants a 1060ms move.
+				const settleTo = (elapsed, remaining) => {
+					let d = 300;
+					for (let i = 0; i < 60; i++) d = paceDuration(elapsed, d, remaining);
+					return d;
+				};
 				check(
 					'a slow render stretches the move to meet it',
-					paceDuration(0.3, 300, 600) > 600,
-					`300ms → ${Math.round(paceDuration(0.3, 300, 600))}ms`,
+					settleTo(300, 600) > 1000 && paceDuration(300, 300, 600) < settleTo(300, 600),
+					`300ms → ${Math.round(settleTo(300, 600))}ms, eased not snapped`,
 				);
-				check('a fast one never cuts it short', paceDuration(0.3, 300, 5) === 300);
 				check(
-					'and a hopeless one stops stretching',
-					paceDuration(0.5, 300, 90_000) <= 1400,
-					`capped at ${paceDuration(0.5, 300, 90_000)}ms`,
+					'and shortens again when one turns out easy',
+					settleTo(100, 5) < 400,
+					`→ ${Math.round(settleTo(100, 5))}ms`,
 				);
 
-				// The move must never run backwards. It used to: progress was
+				// No ceiling. A frame that takes a minute gets a move that takes
+				// a minute, so you are still travelling when the pixels arrive
+				// instead of parked in front of a blur.
+				check(
+					'and a really slow one gets a really slow move',
+					settleTo(1000, 60_000) > 50_000,
+					`60s of rendering → ${(settleTo(1000, 60_000) / 1000).toFixed(0)}s move`,
+				);
+
+				// Run the loop the way #tick runs it. Two things must hold.
+				//
+				// It must never run backwards: progress used to be
 				// elapsed/duration, and the duration is revised upward the moment
-				// the render admits how slow it is, so progress fell off a cliff
-				// and the zoom visibly reversed before picking up again.
+				// the render admits how slow it is, so progress fell off a cliff.
+				//
+				// And it must actually arrive. Pacing against the *fraction left*
+				// rather than elapsed time reads as equivalent, but feeds back --
+				// the duration grows as the end nears, so the move decays towards
+				// the finish instead of reaching it. That one spun 1215 frames
+				// without ever showing the finished picture.
 				let progress = 0;
 				let duration = 300;
+				let elapsed = 0;
 				let last = 0;
 				let worstReversal = 0;
-				for (let now = 0, previous = 0; now <= 900; previous = now, now += 50) {
-					const remaining = now < 150 ? null : Math.max(0, 900 - (now - 150) * 0.6);
-					duration = paceDuration(progress, duration, remaining);
-					progress = Math.min(1, progress + (now - previous) / duration);
+				let arrivedAt = null;
+				for (let tick = 0; tick < 5000 && arrivedAt === null; tick++) {
+					elapsed += 16;
+					const remaining = elapsed < 150 ? null : Math.max(0, 900 - (elapsed - 150) * 0.6);
+					duration = paceDuration(elapsed, duration, remaining);
+					progress += 16 / duration;
+					if (progress > 0.998) progress = 1;
 					worstReversal = Math.min(worstReversal, progress - last);
 					last = progress;
+					if (progress >= 1) arrivedAt = elapsed;
 				}
 				check(
 					'and the move never runs backwards while it is stretched',
-					worstReversal >= 0 && progress > 0,
-					`worst step ${worstReversal.toFixed(3)}, reached ${progress.toFixed(2)}`,
+					worstReversal >= 0,
+					`worst step ${worstReversal.toFixed(3)}`,
+				);
+				check(
+					'and it actually arrives',
+					arrivedAt !== null,
+					arrivedAt === null ? 'never reached the end' : `landed after ${arrivedAt}ms`,
 				);
 			}
 

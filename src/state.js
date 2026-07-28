@@ -51,28 +51,34 @@ const DEEP_ITERATIONS = 500;
 /** Perturbation's floor: dc underflows a double past here. Deeper than anyone gets by hand. */
 export const MIN_PER_PIXEL = 1e-295;
 
-const MAX_ITERATIONS = 200_000;
+export const MAX_ITERATIONS = 200_000;
 
 /**
- * How many iterations to spend at a given scale.
+ * A depth-derived iteration count. Two jobs, neither of them "the right
+ * number", because there is no right number as a function of depth.
  *
- * The shape is guesswork -- what a frame really needs depends on what's in it,
- * which you can't know before rendering it -- but the *level* was measured. It
- * used to run about one press of the iteration button (1.5x) richer than any
- * frame could use. Across the opening view and zooms of 1e3, 1e6, 1e12 and
- * 1e21, raising the count by 1.5x changed at most 0.8% of pixels and usually
- * none at all, so none of them were short; dropping it by 1.5x changed 0.1% or
- * less almost everywhere. That headroom is pure waiting, so it's gone.
+ * How many iterations a frame needs depends overwhelmingly on *where* it is,
+ * not how deep. Measured at one scale, 2.1e-14 per pixel: a spot on the antenna
+ * needed 27,750 to stop showing black where detail belongs, a spot in seahorse
+ * valley needed 4,655, and a spot by a mini-Mandelbrot needed 400. Seventy-fold
+ * spread, at identical depth, and the ordering reshuffles as you go deeper --
+ * at 1e-9 per pixel the seahorse spot was the hungry one at 22,200. No curve in
+ * perPixel can fit that, so the renderer measures instead: see
+ * Renderer#measureIterations.
  *
- * There is often more slack than that once you're deep -- at 1e21 the count can
- * be cut by 3.4x with no pixel changing at all -- but how much depends on where
- * you are, and coming up short shows as black blobs where detail belongs. One
- * click is the part that was safe everywhere.
+ * What this is still good for:
+ *
+ *   - a starting guess for that search, which only affects how many probes it
+ *     takes to converge;
+ *   - keying the palette, which wants something that moves smoothly and
+ *     predictably with depth and would be thrown around by the real count.
  */
-function autoIterationsFor(perPixel) {
+export function nominalIterationsFor(perPixel) {
 	const decades = Math.max(0, Math.log10(REFERENCE_SCALE / perPixel));
 	return Math.min(MAX_ITERATIONS, Math.round(200 + 135 * Math.pow(decades, 1.45)));
 }
+
+const autoIterationsFor = nominalIterationsFor;
 
 export class ViewState {
 	constructor(fields = {}) {
@@ -118,9 +124,31 @@ export class ViewState {
 		return openingScale(width, height) / this.perPixel;
 	}
 
-	/** True when this view needs arbitrary precision. See the notes above. */
+	/**
+	 * True when this view needs arbitrary precision. See the notes above.
+	 *
+	 * Takes the iteration count as an argument because the renderer measures
+	 * its own, and a count that climbs past the threshold has to drag the
+	 * choice of arithmetic with it -- otherwise a shallow view whose count grew
+	 * would be drawn in plain doubles at exactly the iteration depths where
+	 * they come apart.
+	 */
+	needsPerturbation(iterations = this.maxIterations) {
+		return this.perPixel < DEEP_THRESHOLD || iterations > DEEP_ITERATIONS;
+	}
+
 	get deep() {
-		return this.perPixel < DEEP_THRESHOLD || this.maxIterations > DEEP_ITERATIONS;
+		return this.needsPerturbation();
+	}
+
+	/**
+	 * What the palette is keyed to. Depth only -- deliberately not the actual
+	 * iteration count, which the renderer measures per view and which therefore
+	 * jumps around between neighbouring frames. Colours should follow how deep
+	 * you are, not how awkward the local scenery turned out to be.
+	 */
+	get nominalIterations() {
+		return nominalIterationsFor(this.perPixel);
 	}
 
 	/**

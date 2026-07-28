@@ -16,8 +16,11 @@ import { fromNumber } from './fixed.js';
 /** Floor on the animation, so even instant frames still glide. */
 const MIN_MS = 190;
 
-/** Ceiling, so a frame that takes half a minute doesn't crawl for half a minute. */
-const MAX_MS = 1400;
+/**
+ * The move has no ceiling. A frame that takes half a minute gets a move that
+ * takes half a minute, so you are still travelling when the pixels arrive
+ * rather than parked in front of a blur waiting for them.
+ */
 
 /** Cross-fade from the stretched frame to the sharp one, when it's ready in time. */
 const SETTLE_MS = 160;
@@ -43,23 +46,32 @@ const ease = (t) => t;
 /**
  * How long the move should take, revised as the render reveals its own pace.
  *
- * This is the bit that makes the zoom land as the pixels do. Expressed as a
- * total duration for the whole move, so `progress` has to be folded in: what
- * we actually want is for the part still to come to take as long as the render
- * has left. We only ever stretch, never cut short -- shortening would make the
- * picture lurch -- and we stop at MAX_MS, because past a second and a half a
- * slow frame should let you look at something rather than creep towards it.
+ * This is the bit that makes the zoom land as the pixels do: however long the
+ * frame has taken so far, plus however much it says it has left.
  *
- * @param progress  how much of the move is already done, 0 to 1
+ * It follows the estimate in both directions. Speeding up used to be forbidden,
+ * because back when progress was elapsed/duration a shorter duration made the
+ * picture leap; now that progress is carried, a shorter duration only raises
+ * the speed from here on, which is exactly right when a frame turns out easier
+ * than feared. The estimate is noisy early on, so we ease towards it rather
+ * than snapping, and never drop below MIN_MS.
+ *
+ * Note it is framed against elapsed time, not against how much of the move is
+ * left. Dividing by the fraction remaining looks equivalent -- "make what's
+ * left take as long as the render has left" -- but it feeds back: as progress
+ * approaches 1 the duration blows up, the move decays towards the end instead
+ * of arriving at it, and it never quite gets there. Which is both a visible
+ * deceleration and, in one case here, a loop that spun 1215 frames without
+ * ever showing the finished picture.
+ *
+ * @param elapsed   ms the move has been running
  * @param duration  what we're currently aiming for
  * @param remaining ms of rendering left, or null while it's too early to say
  */
-export function paceDuration(progress, duration, remaining) {
+export function paceDuration(elapsed, duration, remaining) {
 	if (remaining === null) return duration;
-	const left = 1 - progress;
-	if (left <= 0) return duration;
-	const wanted = (remaining + SETTLE_MS) / left;
-	return wanted > duration ? Math.min(wanted, MAX_MS) : duration;
+	const wanted = elapsed + remaining + SETTLE_MS;
+	return Math.max(MIN_MS, duration + (wanted - duration) * 0.35);
 }
 
 /**
@@ -171,8 +183,9 @@ export class Viewport {
 							// would then *fall* -- the zoom visibly ran backwards
 							// by a fifth of the move before jumping forward again.
 							progress: 0,
+							elapsed: 0,
 							lastTick: performance.now(),
-							duration: clamp(this.#renderer.predict(view), MIN_MS, MAX_MS),
+							duration: Math.max(MIN_MS, this.#renderer.predict(view)),
 							landed: false,
 							settleFrom: null,
 						}
@@ -226,18 +239,22 @@ export class Viewport {
 		const move = this.#move;
 
 		if (move && !move.landed) {
-			move.duration = paceDuration(
-				move.progress,
-				move.duration,
-				this.#renderer.remainingMs(),
-			);
-
 			// Advance by however long the last frame actually took. Revising the
 			// duration now changes only the speed from here on; it can never
 			// walk the picture backwards.
 			const step = Math.max(0, now - move.lastTick);
 			move.lastTick = now;
-			move.progress = Math.min(1, move.progress + step / move.duration);
+			move.elapsed += step;
+			move.duration = paceDuration(
+				move.elapsed,
+				move.duration,
+				this.#renderer.remainingMs(),
+			);
+			move.progress += step / move.duration;
+
+			// Close enough is arrived. Guards against a duration that keeps
+			// growing leaving the move forever just short of done.
+			if (move.progress > 0.998) move.progress = 1;
 
 			if (move.progress < 1) {
 				this.#drawStretched(ease(move.progress));

@@ -14,11 +14,43 @@
 
 import { Cancelled, WorkerPool } from './pool.js';
 import { colorize } from './palette.js';
+import { MAX_ITERATIONS } from './state.js';
+
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 const TILE_SIZE = 128;
 
 /** What we guess a frame will cost before we've ever timed one. */
 const DEFAULT_PREDICTION = 320;
+
+/** Width of the postage-stamp frame used to size up the iteration count. */
+const PROBE_WIDTH = 64;
+
+// Both tolerances are in probe pixels, because that is the resolution the
+// measurement actually has -- a probe is a few thousand pixels, so a fraction
+// finer than one of them would be noise.
+//
+// They differ on purpose. Climbing is about rescuing a frame that is lying to
+// you, where several pixels' worth is already worth the wait. Coming back down
+// is only worth doing while it is free, and the shallow views are where being
+// stingy shows: at the opening view, 200 iterations costs two probe pixels
+// against a converged 349 and looks right, while 89 costs nine and visibly
+// shortens the antenna.
+const STARVED_PIXELS = 6;
+const SETTLED_PIXELS = 2;
+
+/** Step of the ladder the search walks. Smaller overshoots less but probes more. */
+const LADDER = 1.5;
+
+/**
+ * Bounds on the search. Twelve rungs of the ladder is a hundredfold either way
+ * from the starting guess, which sounds absurd until you measure it: the guess
+ * was out by 6x on the view that prompted all this, and by 11x the other way
+ * on an easy one. Stopping short just means going back to drawing black where
+ * there is detail, so the limit is set well clear of the cases we have seen.
+ */
+const MIN_PROBE_ITERATIONS = 60;
+const MAX_PROBE_STEPS = 12;
 
 export class Renderer {
 	#buffer = document.createElement('canvas');
@@ -159,15 +191,24 @@ export class Renderer {
 		const x0 = state.centerX - (state.perPixel * width) / 2;
 		const y0 = state.centerY - (state.perPixel * height) / 2;
 
-		const common = {
-			type: 'tile',
-			x0,
-			y0,
-			maxIterations: state.maxIterations,
-			deep: state.deep,
-		};
+		// Find out what this view actually needs before committing to it.
+		let maxIterations = state.maxIterations;
+		if (state.autoIterations) {
+			this.#emit({ type: 'phase', phase: 'iterations', started });
+			try {
+				maxIterations = await this.#measureIterations(state, x0, y0, stale);
+			} catch (error) {
+				return this.#fail(error, stale());
+			}
+			if (stale()) return;
+			this.#emit({ type: 'iterations', value: maxIterations });
+		}
 
-		if (state.deep) {
+		// Decided from the measured count, not the guess it started from.
+		const deep = state.needsPerturbation(maxIterations);
+		const common = { type: 'tile', x0, y0, maxIterations, deep };
+
+		if (deep) {
 			this.#emit({ type: 'phase', phase: 'reference', started });
 			let orbit;
 			try {
@@ -177,7 +218,7 @@ export class Renderer {
 						cx: state.cx,
 						cy: state.cy,
 						prec: state.prec,
-						maxIterations: state.maxIterations,
+						maxIterations,
 					},
 					{
 						onProgress: ({ done, total }) => {
@@ -238,10 +279,77 @@ export class Renderer {
 		this.#phase = 'idle';
 
 		const elapsed = performance.now() - started;
-		const cost = elapsed / (width * height * state.maxIterations);
+		const cost = elapsed / (width * height * maxIterations);
 		this.#rate = this.#rate === null ? cost : this.#rate * 0.7 + cost * 0.3;
 
 		this.#emit({ type: 'done', elapsed });
+	}
+
+	/**
+	 * Work out how many iterations this view needs, by rendering it at
+	 * postage-stamp size a few times and watching the black area.
+	 *
+	 * Raising the limit can only ever turn black pixels into coloured ones, so
+	 * "how much black goes away when I double the limit" is exactly "how much
+	 * of this frame is a lie". Climb while that's worth having, then come back
+	 * down for as long as it costs nothing, and stop.
+	 *
+	 * This exists because no function of depth can answer the question. At one
+	 * fixed scale the honest answer ranged from 400 to 27,750 depending only on
+	 * where you were pointing.
+	 */
+	async #measureIterations(state, x0, y0, stale) {
+		const height = Math.max(8, Math.round((PROBE_WIDTH * this.height) / this.width));
+		const job = {
+			type: 'probe',
+			width: PROBE_WIDTH,
+			height,
+			perPixel: (state.perPixel * this.width) / PROBE_WIDTH,
+			x0,
+			y0,
+			cx: state.cx,
+			cy: state.cy,
+			prec: state.prec,
+			deep: state.deep,
+		};
+
+		const seen = new Map();
+		const blackAt = async (iterations) => {
+			if (!seen.has(iterations)) {
+				const result = await this.#pool.run({ ...job, maxIterations: iterations });
+				seen.set(iterations, result.interior);
+			}
+			return seen.get(iterations);
+		};
+
+		let best = clamp(state.maxIterations, MIN_PROBE_ITERATIONS, MAX_ITERATIONS);
+		let black = await blackAt(best);
+		if (stale()) return best;
+
+		// Climb while there is still meaningful black to melt away.
+		for (let step = 0; step < MAX_PROBE_STEPS; step++) {
+			const higher = Math.min(MAX_ITERATIONS, Math.round(best * LADDER));
+			if (higher === best) break;
+			const next = await blackAt(higher);
+			if (stale()) return best;
+			if (black - next < STARVED_PIXELS) break;
+			best = higher;
+			black = next;
+		}
+
+		// `black` is now as low as this view goes. Come back down for as long as
+		// it stays that low -- measured against the settled figure, not against
+		// each step, or it would creep down a tolerance at a time.
+		const settled = black;
+		for (let step = 0; step < MAX_PROBE_STEPS; step++) {
+			const lower = Math.max(MIN_PROBE_ITERATIONS, Math.round(best / LADDER));
+			if (lower === best) break;
+			if ((await blackAt(lower)) - settled > SETTLED_PIXELS) break;
+			if (stale()) return best;
+			best = lower;
+		}
+
+		return best;
 	}
 
 	#fail(error, alreadyStale) {
@@ -260,7 +368,8 @@ export class Renderer {
 			palette: state.palette,
 			density: state.density,
 			offset: state.offset,
-			maxIterations: state.maxIterations,
+			// Depth, not the measured count: see ViewState#nominalIterations.
+			maxIterations: state.nominalIterations,
 		});
 		this.#ctx.putImageData(image, tile.x, tile.y);
 	}

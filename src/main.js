@@ -82,11 +82,22 @@ function onRenderEvent(event) {
 			// `started` comes from the renderer, so a frame that supersedes one
 			// still in flight restarts the clock instead of inheriting it.
 			startTiming(event.started);
-			$('progress-phase').textContent =
-				event.phase === 'reference' ? 'high-precision orbit' : 'rendering';
+			$('progress-phase').textContent = {
+				iterations: 'sizing up the view',
+				reference: 'high-precision orbit',
+				tiles: 'rendering',
+			}[event.phase];
 			setBar(0);
 			$('progress-detail').textContent =
 				event.phase === 'reference' ? `${state.prec} bits of precision` : '';
+			break;
+
+		case 'iterations':
+			// The renderer measured what this view actually needs. Keep it, so
+			// the readout and the URL say what was drawn.
+			state.maxIterations = event.value;
+			$('iter').textContent = `${event.value.toLocaleString()} (auto)`;
+			history.replaceState(null, '', state.toURL());
 			break;
 
 		case 'reference-progress':

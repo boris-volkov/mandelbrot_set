@@ -76,15 +76,34 @@ The upshot: the readout tells you when it has switched from `double precision`
 to `perturbation`, and how many bits it's carrying. Renders that take a while
 get a timer and a progress bar, and can be stopped.
 
-The iteration count climbs with depth on its own, and how far it climbs was
-measured rather than guessed. Across the opening view and zooms of 1e3, 1e6,
-1e12 and 1e21, raising it by 1.5× changed at most 0.8% of pixels and usually
-none — so none of those frames were short of iterations — while lowering it by
-1.5× changed 0.1% or less almost everywhere. That was a click's worth of pure
-waiting, so it's gone. There's often more slack once you're deep (at 1e21 the
-count can be cut by 3.4× without a single pixel changing), but how much depends
-on where you are, and coming up short shows as black where detail belongs. `a`
-turns the automatic count off; `+` and `−` set it by hand.
+## How many iterations
+
+Every pixel gets a limit on how long it may run before we give up and call it
+part of the set. Set it too low and the picture lies to you: detail turns into
+a black blob. Set it too high and you wait for nothing.
+
+The obvious thing is to raise the limit with depth. It doesn't work, and it
+isn't close. What a frame needs depends overwhelmingly on *where* it is. At one
+fixed scale, 2.1e-14 per pixel:
+
+| where | iterations needed |
+|---|---|
+| a spot on the antenna | 27,750 |
+| a spot in seahorse valley | 4,655 |
+| a spot by a mini-Mandelbrot | 400 |
+
+Seventy-fold spread at identical depth — and the ordering reshuffles as you go
+deeper: at 1e-9 per pixel the seahorse spot was the hungry one, at 22,200.
+
+So the limit is measured, not predicted. Before rendering a frame properly, the
+renderer draws it a few times at postage-stamp size and watches the black area.
+Raising the limit can only ever turn black pixels into coloured ones, so *how
+much black goes away when I raise it* is exactly *how much of this frame is a
+lie*. It climbs while that's worth having, comes back down for as long as it
+costs nothing, and stops — usually four to eight probes, each a few thousand
+pixels, against a frame of millions.
+
+`a` turns it off; `+` and `−` then set the limit by hand.
 
 ## Getting there smoothly
 
@@ -100,13 +119,20 @@ That seed is exactly what the animation shows at the moment it lands, so the
 handover is invisible; tiles then sharpen it in place rather than appearing out
 of nothing.
 
-The move runs at one speed throughout. Scale interpolates *geometrically* —
-zoom is multiplicative, so even travel through the exponent is even travel to
-the eye, where interpolating the scale itself would look like falling. Progress
-is carried from frame to frame rather than recomputed from the clock, because
-the duration gets revised upward mid-move once the render admits how slow it
-is, and `elapsed / duration` would then fall: the zoom used to visibly run
-backwards by a fifth of the move before jumping forward again.
+The move runs at one speed throughout, and takes as long as it takes — a frame
+that needs half a minute gets a move that lasts half a minute, so you're still
+travelling when the pixels arrive rather than parked in front of a blur.
+
+Scale interpolates *geometrically* — zoom is multiplicative, so even travel
+through the exponent is even travel to the eye, where interpolating the scale
+itself would look like falling. Progress is carried from frame to frame rather
+than recomputed from the clock, because the duration gets revised mid-move once
+the render admits how slow it is, and `elapsed / duration` would then fall: the
+zoom used to visibly run backwards by a fifth of the move before jumping
+forward again. For the same reason the pace is set against elapsed time and not
+against the fraction of the move left — that reads as equivalent but feeds
+back, stretching the duration as the end nears until the move decays towards
+the finish without ever arriving.
 
 The colours hold still too, which took three goes to get right.
 
