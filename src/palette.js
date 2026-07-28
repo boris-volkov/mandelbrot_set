@@ -97,58 +97,53 @@ function lutFor(name) {
 	return lut;
 }
 
-/** Fewest times the palette should repeat across a frame before we stretch it. */
-const MIN_CYCLES = 1.25;
+/**
+ * Iteration limit the palette is tuned around: at this many, it doesn't
+ * stretch at all and the mapping is the one this program has always used.
+ */
+const REFERENCE_ITERATIONS = 1200;
+
+/**
+ * How the curve's flattening is undone. pow(nu, 0.4) has slope 0.4·nu^-0.6, so
+ * scaling by nu^0.6 keeps a given spread of iterations covering the same amount
+ * of palette however deep you are.
+ */
+const FLATTENING = 0.6;
 
 const curve = (nu) => Math.pow(nu > 0 ? nu : 0, 0.4);
 
 /**
- * Turn a tile's escape values into pixels.
- *
- * Zoomed out, escape counts run from 1 to hundreds and the pow(nu, 0.4) curve
- * spreads them over the palette nicely all by itself -- so we leave it alone,
- * and the picture looks exactly as it always has.
- *
- * Deep down, everything on screen escapes between (say) 37,900 and 38,100.
- * The curve is nearly flat across a window that narrow, and the whole frame
- * comes out one colour. So when the range present is too compressed to fill
- * the palette even once, we stretch it until it does. That's the difference
- * between a legible picture at 1e37x and a rectangle of navy blue.
- *
- * @param {Float32Array} values  one escape value per pixel, INTERIOR for inside
- * @param {ImageData}    target  where the pixels go
- * @param {object}       opts    { palette, density, offset, range, interior }
- */
-/**
- * Work out how escape values map onto the palette for one frame.
+ * Work out how escape values map onto the palette.
  *
  * Kept separate from the painting so it can be inspected on its own: this is
  * the part that decides whether the colours hold still as you zoom, and it is
- * much easier to check a handful of numbers than to squint at two pictures.
+ * far easier to check a handful of numbers than to squint at two pictures.
  *
- * @returns {{low: number, scale: number, shift: number, stretch: number}}
+ * @returns {{scale: number, shift: number, stretch: number}}
  */
-export function mapping(range, density = 1, offset = 0) {
-	const span = range ? curve(range.hi) - curve(range.lo) : 0;
-
-	// Scale is the only thing the frame's contents are allowed to influence,
-	// and only in doublings.
+export function mapping(maxIterations, density = 1, offset = 0) {
+	// Three decisions here, all about holding the colours still while you zoom.
 	//
-	// Two decisions here, both about holding the colours still while you zoom.
+	// The scale is read off the iteration limit, not off the spread of escape
+	// values actually measured in the frame. Measuring seems obviously better
+	// -- it's the real answer to "how much colour does this picture need" --
+	// but it makes the palette follow the picture, and in a smooth region the
+	// spread halves on every zoom step. So the scale doubles on every zoom
+	// step, and the colours change every single time. Zooming into open water
+	// went x1, x8, x32, x64, x256 in five clicks. The iteration limit moves
+	// slowly and predictably instead, so the colours hold for long runs and
+	// shift a handful of times over an entire descent.
 	//
-	// Nothing is anchored to where the frame's range happens to start. That
-	// seems like the obvious thing to do -- pin the lowest escape value to the
-	// start of the palette -- but the palette is a cycle, so an anchor buys no
-	// extra colour, it only rotates the wheel. And since the range shifts a
-	// little on every zoom step, anchoring to it turns every step into a
-	// rotation. Measured over a 40-step descent, anchoring moved the colours on
-	// 35 steps out of 39; not anchoring moved them on 6.
+	// Nothing is anchored to where the range starts, either. Pinning the lowest
+	// escape value to the start of the palette looks right, but the palette is
+	// a cycle -- an anchor buys no extra colour, it only rotates the wheel --
+	// and since the range shifts a little every step, anchoring to it turned
+	// every step into a rotation.
 	//
-	// The scale is then rounded to a power of two, so those 6 become as rare as
-	// they can be. Between changes the mapping is *identical*, not merely close,
-	// so a run of zooming leaves the colours exactly where they were. It also
-	// means level 0 is the mapping this program has always used.
-	const wanted = span > 1e-9 ? (MIN_CYCLES * TAU) / span : 1;
+	// And the scale is rounded to a power of two, so between changes the
+	// mapping is *identical* rather than merely close. A run of zooming leaves
+	// the colours exactly where they were.
+	const wanted = (maxIterations / REFERENCE_ITERATIONS) ** FLATTENING;
 	const stretch = 2 ** Math.max(0, Math.round(Math.log2(wanted)));
 
 	return {
@@ -158,11 +153,25 @@ export function mapping(range, density = 1, offset = 0) {
 	};
 }
 
-export function colorize(values, target, { palette, density, offset, range, interior }) {
+/**
+ * Turn a tile's escape values into pixels.
+ *
+ * Zoomed out, escape counts run from 1 to a few hundred and the pow(nu, 0.4)
+ * curve spreads them over the palette nicely by itself. Deep down, everything
+ * on screen escapes between (say) 37,900 and 38,100; the curve is nearly flat
+ * across a window that narrow, and the frame would come out one colour. The
+ * scale from mapping() undoes exactly that much flattening -- the difference
+ * between a legible picture at 1e37x and a rectangle of navy blue.
+ *
+ * @param {Float32Array} values  one escape value per pixel, INTERIOR for inside
+ * @param {ImageData}    target  where the pixels go
+ * @param {object}       opts    { palette, density, offset, maxIterations, interior }
+ */
+export function colorize(values, target, { palette, density, offset, maxIterations, interior }) {
 	const lut = lutFor(palette);
 	const pixels = new Uint32Array(target.data.buffer);
 	const inside = interior ?? 0xff000000;
-	const { scale, shift } = mapping(range, density, offset);
+	const { scale, shift } = mapping(maxIterations, density, offset);
 
 	for (let i = 0; i < values.length; i++) {
 		const nu = values[i];

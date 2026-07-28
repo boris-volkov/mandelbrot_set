@@ -313,7 +313,7 @@
 					'a 90-step zoom survives a URL round trip',
 					same && carried < deepest.perPixel / 1000,
 					`${deepest.prec} bits, ${digits} digits, ` +
-						`zoom ${deepest.magnification(1600).toExponential(1)}×`,
+						`zoom ${deepest.magnification(1600, 900).toExponential(1)}×`,
 				);
 				check('deep views select the perturbation path', deepest.deep === true);
 				check('the opening view uses plain doubles', state.deep === false);
@@ -340,7 +340,13 @@
 
 			const paint = (values, opts) => {
 				const image = new ImageData(values.length, 1);
-				colorize(values, image, { palette: 'classic', density: 1, offset: 0, ...opts });
+				colorize(values, image, {
+					palette: 'classic',
+					density: 1,
+					offset: 0,
+					maxIterations: 1200,
+					...opts,
+				});
 				return new Uint32Array(image.data.buffer);
 			};
 
@@ -358,57 +364,47 @@
 			}
 
 			{
-				// A wide range is left alone, so shallow views keep the look
-				// this program has always had.
-				const values = new Float32Array([2, 20, 90, 260]);
-				const plain = paint(values);
-				const ranged = paint(values, { range: { lo: 1, hi: 300 } });
-				check(
-					'a wide range is coloured exactly as before',
-					plain.every((p, i) => p === ranged[i]),
-				);
-			}
-
-			{
 				const { mapping } = await import('./src/palette.js');
 
-				// The colours must not creep as you zoom. Two frames whose
-				// ranges differ -- which is every pair of frames -- have to
-				// paint the same escape value the same way, so long as neither
-				// crossed a doubling. Anchoring the palette to where each
-				// frame's range starts is what used to break this: measured
-				// over a 40-step descent it moved the colours on 35 steps out
-				// of 39, and the worst moved them half a turn.
+				// The colours must not creep as you zoom. What the frame happens
+				// to contain must not reach the palette at all -- zooming into a
+				// smooth region halves the spread of escape values every step, so
+				// a palette that tracked it doubled its scale every step and
+				// repainted the picture on every single click (x1, x8, x32, x64,
+				// x256 in five). Only the iteration limit gets a say now, and only
+				// in doublings.
 				const values = new Float32Array([120, 300, 700, 1500]);
-				const a = paint(values, { range: { lo: 40, hi: 1800 } });
-				const b = paint(values, { range: { lo: 55, hi: 2100 } });
 				check(
-					'a drifting range does not move the colours',
-					a.every((p, i) => p === b[i]),
-					`same level (×${mapping({ lo: 40, hi: 1800 }).stretch}), identical output`,
+					'the same iteration limit always paints the same colours',
+					paint(values, { maxIterations: 900 }).every(
+						(p, i) => p === paint(values, { maxIterations: 900 })[i],
+					),
+				);
+				check(
+					'a nearby iteration limit paints them the same too',
+					paint(values, { maxIterations: 900 }).every(
+						(p, i) => p === paint(values, { maxIterations: 1150 })[i],
+					),
+					`both sit at ×${mapping(900).stretch}`,
 				);
 
-				// It adapts only in doublings, so the change is rare and the
-				// bands split cleanly rather than the hue sliding.
-				const steps = [
-					{ lo: 40, hi: 1800 },
-					{ lo: 1000, hi: 1400 },
-					{ lo: 37900, hi: 38100 },
-				].map((r) => mapping(r).stretch);
+				// Level 0 is the mapping this program has always used.
+				const levels = [300, 1200, 5000, 40000, 150000].map((n) => mapping(n).stretch);
 				check(
-					'and adapts in powers of two when it must',
-					steps.every((s) => Number.isInteger(Math.log2(s))) &&
-						steps[0] < steps[2],
-					`wide ×${steps[0]} · narrow ×${steps[1]} · very narrow ×${steps[2]}`,
+					'it opens unstretched and adapts in powers of two',
+					levels[0] === 1 &&
+						levels.every((s) => Number.isInteger(Math.log2(s))) &&
+						levels.every((s, i) => i === 0 || s >= levels[i - 1]),
+					`300→×${levels[0]}  1.2k→×${levels[1]}  5k→×${levels[2]}  ` +
+						`40k→×${levels[3]}  150k→×${levels[4]}`,
 				);
 			}
 
 			{
-				// A compressed range -- everything escaping at nearly the same
-				// count, which is what deep zoom looks like -- gets stretched.
-				// Distinct colours is the wrong measure here; two neighbouring
-				// palette entries count as distinct but look identical. What
-				// matters is how far apart the colours actually are.
+				// Deep down everything escapes at nearly the same count. Without
+				// the stretch that frame is one flat colour. Distinct colours is
+				// the wrong measure -- two neighbouring palette entries count as
+				// distinct but look identical -- so measure how far apart they get.
 				const spread = (pixels) => {
 					let widest = 0;
 					for (let channel = 0; channel < 3; channel++) {
@@ -419,16 +415,16 @@
 				};
 
 				const values = new Float32Array([37900, 37950, 38000, 38050, 38100]);
-				const flat = spread(paint(values));
-				const stretched = spread(paint(values, { range: { lo: 37900, hi: 38100 } }));
+				const flat = spread(paint(values, { maxIterations: 1200 }));
+				const stretched = spread(paint(values, { maxIterations: 40000 }));
 
 				check(
-					'a compressed range is nearly flat without stretching',
+					'200 iterations of spread is nearly flat unstretched',
 					flat < 12,
-					`only ${flat}/255 of colour spread across 200 iterations`,
+					`only ${flat}/255 of colour spread`,
 				);
 				check(
-					'and opens right up with it',
+					'and opens right up at the depth that needs it',
 					stretched > 100,
 					`${stretched}/255 of colour spread, ${Math.round(stretched / flat)}× more`,
 				);

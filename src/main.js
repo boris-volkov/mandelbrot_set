@@ -168,7 +168,7 @@ function updateReadout() {
 	const digits = Math.min(state.significantDigits, 24);
 	$('re').textContent = toDecimalString(state.cx, state.prec, digits);
 	$('im').textContent = toDecimalString(state.cy, state.prec, digits);
-	$('zoom').textContent = formatZoom(state.magnification(renderer.width));
+	$('zoom').textContent = formatZoom(state.magnification(renderer.width, renderer.height));
 	$('iter').textContent =
 		state.maxIterations.toLocaleString() + (state.autoIterations ? ' (auto)' : '');
 	$('math').textContent = state.deep ? `perturbation · ${state.prec} bits` : 'double precision';
@@ -409,7 +409,7 @@ async function savePNG() {
 	if (!blob) return;
 	const link = document.createElement('a');
 	link.href = URL.createObjectURL(blob);
-	const zoom = formatZoom(state.magnification(renderer.width)).replace(/[^\w]/g, '');
+	const zoom = formatZoom(state.magnification(renderer.width, renderer.height)).replace(/[^\w]/g, '');
 	link.download = `mandelbrot-${zoom}.png`;
 	link.click();
 	URL.revokeObjectURL(link.href);

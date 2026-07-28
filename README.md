@@ -90,24 +90,37 @@ That seed is exactly what the animation shows at the moment it lands, so the
 handover is invisible; tiles then sharpen it in place rather than appearing out
 of nothing.
 
-The colours hold still too, in two senses.
+The colours hold still too, which took three goes to get right.
 
-Within a frame: the palette is stretched to the range of escape values present,
-and that range used to be discovered as tiles arrived — which meant the whole
-image re-coloured under you, repeatedly, mid-render. Now a probe pass renders a
-postage-stamp version of the frame first, purely to learn the range, and the
-palette is pinned before a single real pixel is coloured. Under 1% of a frame.
+`pow(nu, 0.4)` spreads escape counts over the palette nicely when they run from
+1 to a few hundred. Deep down they all land between (say) 37,900 and 38,100,
+the curve is nearly flat across a window that narrow, and the frame comes out
+one colour. So something has to stretch it back open.
 
-Between frames: the obvious thing is to pin the lowest escape value on screen
-to the start of the palette. It's also wrong. The palette is a *cycle*, so an
-anchor buys no extra colour — it only rotates the wheel — and since the range
-shifts a little on every zoom step, anchoring to it turns every step into a
-rotation. Nothing is anchored now, and the one thing the frame is allowed to
-influence, the scale, is rounded to a power of two. Between changes the mapping
-is identical rather than merely close, so a run of zooming leaves the colours
-exactly where they were, and level 0 is the mapping this program has always
-used. Measured down a 40-step descent: the colours used to move on 35 steps out
-of 39, and now move on 5.
+The obvious something is the spread of escape values measured in the frame:
+stretch until that fills the palette once. It works, and it is wrong, because
+it makes the palette follow the picture. Zoom into a smooth region and the
+spread halves on every step — so the scale doubles on every step, and the
+colours change on every single click. Going ×1, ×8, ×32, ×64, ×256 in five
+zooms is not a colour scheme, it's a strobe.
+
+What the stretch is really compensating for is the curve flattening, and that
+depends on how big escape counts are around here, not on what today's frame
+happens to contain. `pow(nu, 0.4)` has slope `0.4·nu^-0.6`, so scaling by
+`nu^0.6` cancels it exactly — with the iteration limit standing in for `nu`.
+That moves slowly and predictably, so the colours hold. Rounded to a power of
+two on top, the scale changes **twice** over a 40-step descent instead of forty
+times, and level 0 is the mapping this program has always used.
+
+Nothing is anchored to where the range starts, either. Pinning the lowest
+escape value to the start of the palette looks right, but the palette is a
+*cycle* — an anchor buys no extra colour, it only rotates the wheel — and since
+the range shifts a little every step, anchoring to it turned every step into a
+rotation.
+
+Within a frame, the palette was also being re-derived as tiles arrived, so the
+image re-coloured under you mid-render. It doesn't depend on the tiles at all
+now, so there is nothing left to re-derive.
 
 `test.html` checks the arithmetic against a deliberately slow, obviously
 correct version that does every single iteration in full precision. At 1e-24

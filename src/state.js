@@ -24,10 +24,12 @@ import { PALETTES } from './palette.js';
 const REFERENCE_SCALE = 0.003;
 
 /**
- * Width of the complex plane the opening view covers on a typical widescreen
- * window. Only used to make "1x" mean "where you started".
+ * Units per pixel for the opening view in a window this size -- wide enough to
+ * hold the whole set either way round.
  */
-const OPENING_SPAN = 5;
+export function openingScale(width, height) {
+	return Math.max(4.2 / width, 2.8 / height);
+}
 
 // Doubles fail us for two independent reasons, and either one is enough to
 // send us down the perturbation path.
@@ -74,7 +76,7 @@ export class ViewState {
 	}
 
 	static initial(width, height) {
-		const perPixel = Math.max(4.2 / width, 2.8 / height);
+		const perPixel = openingScale(width, height);
 		const prec = precisionFor(perPixel);
 		return new ViewState({
 			prec,
@@ -88,12 +90,16 @@ export class ViewState {
 	// --- derived ------------------------------------------------------------
 
 	/**
-	 * Magnification, as a multiple of the view you start from. Measured from
-	 * the span of the window rather than the size of a pixel, so it doesn't
-	 * change meaning on a high-density display.
+	 * Magnification, as a multiple of the opening view *in this window*.
+	 *
+	 * Measured against the window rather than a fixed span, so it reads 1.00x
+	 * when you arrive and exact powers of two as you click -- 1, 2, 4, 8. Held
+	 * against a fixed span it came out at whatever the window's shape made it
+	 * (0.87x on a wide monitor), and every honest doubling after that looked
+	 * like a strange number: 1.73, 3.46, 6.92.
 	 */
-	magnification(viewWidth) {
-		return OPENING_SPAN / (this.perPixel * viewWidth);
+	magnification(width, height) {
+		return openingScale(width, height) / this.perPixel;
 	}
 
 	/** True when this view needs arbitrary precision. See the notes above. */

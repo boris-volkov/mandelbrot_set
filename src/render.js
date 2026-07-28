@@ -4,53 +4,21 @@
 // buffer and handed to the viewport, which decides when to show them. That
 // separation is what keeps the picture from twitching while it loads.
 //
-// A frame runs in three phases:
+// A frame runs in two phases:
 //
 //   1. If we're deep enough to need arbitrary precision, one worker computes
 //      the reference orbit while the others wait. That's the slow part, and
 //      the one worth putting a timer on.
 //
-//   2. A probe: a postage-stamp version of the whole frame, just to learn what
-//      range of escape values is out there. The palette is pinned to it before
-//      any real pixel is coloured.
-//
-//   3. The frame proper, cut into tiles and shared round the pool.
+//   2. The frame proper, cut into tiles and shared round the pool.
 
-import { INTERIOR } from './kernel.js';
 import { Cancelled, WorkerPool } from './pool.js';
 import { colorize } from './palette.js';
 
 const TILE_SIZE = 128;
 
-/** Width of the probe pass. Costs well under 1% of a frame. */
-const PROBE_WIDTH = 56;
-
 /** What we guess a frame will cost before we've ever timed one. */
 const DEFAULT_PREDICTION = 320;
-
-/**
- * The spread of escape values in a tile, ignoring pixels that never escaped.
- *
- * The outright extremes, not percentiles. Trimming the tails was worth trying
- * -- a coarse probe catches different outliers each frame, so the raw maximum
- * is jumpy -- but the palette only reads the *width* of this, and only to pick
- * a power of two, so the jumpiness mostly washes out. Trimming even 0.2% off
- * each end narrows a zoomed-out frame enough to push it up a level, which
- * would quietly restyle the opening view for no gain.
- */
-function spread(values) {
-	let lo = Infinity;
-	let hi = -Infinity;
-	let escaped = 0;
-	for (let i = 0; i < values.length; i++) {
-		const v = values[i];
-		if (v === INTERIOR) continue;
-		escaped++;
-		if (v < lo) lo = v;
-		if (v > hi) hi = v;
-	}
-	return escaped >= 16 && hi > lo ? { lo, hi } : null;
-}
 
 export class Renderer {
 	#buffer = document.createElement('canvas');
@@ -96,17 +64,12 @@ export class Renderer {
 
 	/**
 	 * Whether the buffer is finished. Tracked separately from the frame,
-	 * because during the reference and probe phases `#frame` still holds the
-	 * *previous* frame -- and reporting that one's completion would have the
-	 * viewport cross-fade to a buffer that hasn't been drawn yet.
+	 * because while the reference orbit is being computed `#frame` still holds
+	 * the *previous* frame -- and reporting that one's completion would have
+	 * the viewport cross-fade to a buffer that hasn't been drawn yet.
 	 */
 	get complete() {
 		return this.#complete;
-	}
-
-	/** The spread of escape values the palette is currently pinned to. */
-	get range() {
-		return this.#frame?.range ?? null;
 	}
 
 	/** Resize the buffer. Returns true if it actually changed. */
@@ -241,24 +204,7 @@ export class Renderer {
 		this.#total = tiles.length;
 		this.#emit({ type: 'phase', phase: 'tiles', total: tiles.length, started });
 
-		// Probe first, so the palette is settled before anything is coloured.
-		let range = null;
-		try {
-			const probeHeight = Math.max(8, Math.round((PROBE_WIDTH * height) / width));
-			const probe = await this.#pool.run({
-				...common,
-				tile: { x: 0, y: 0, w: PROBE_WIDTH, h: probeHeight },
-				width: PROBE_WIDTH,
-				height: probeHeight,
-				perPixel: (state.perPixel * width) / PROBE_WIDTH,
-			});
-			range = spread(probe.data);
-		} catch (error) {
-			return this.#fail(error, stale());
-		}
-		if (stale()) return;
-
-		const frame = { width, height, tiles: [], range, complete: false };
+		const frame = { width, height, tiles: [], complete: false };
 		this.#frame = frame;
 
 		const jobs = tiles.map((tile) =>
@@ -314,7 +260,7 @@ export class Renderer {
 			palette: state.palette,
 			density: state.density,
 			offset: state.offset,
-			range: this.#frame?.range,
+			maxIterations: state.maxIterations,
 		});
 		this.#ctx.putImageData(image, tile.x, tile.y);
 	}
