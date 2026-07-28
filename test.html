@@ -388,6 +388,25 @@
 					`both sit at ×${mapping(900).stretch}`,
 				);
 
+				// The two colour controls have to stay independent: frequency
+				// changes how often the palette repeats, phase slides it along,
+				// and neither may quietly do the other's job.
+				const plain = mapping(1200, 1, 0);
+				const denser = mapping(1200, 4, 0);
+				const shifted = mapping(1200, 1, 0.5);
+				check(
+					'the bands control scales the colour frequency',
+					Math.abs(denser.scale / plain.scale - 4) < 1e-9,
+					`×1 → ${plain.scale.toFixed(0)}, ×4 → ${denser.scale.toFixed(0)}`,
+				);
+				check(
+					'and the two colour controls stay independent',
+					shifted.scale === plain.scale &&
+						shifted.shift !== plain.shift &&
+						denser.shift === plain.shift,
+					'frequency leaves the phase alone and vice versa',
+				);
+
 				// Level 0 is the mapping this program has always used.
 				const levels = [300, 1200, 5000, 40000, 150000].map((n) => mapping(n).stretch);
 				check(

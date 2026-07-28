@@ -12,6 +12,12 @@ const PROGRESS_AFTER = 350;
 /** Keep total pixel count sane on phones and 5K displays alike. */
 const MAX_PIXELS = 3_000_000;
 
+/** How far the colour frequency can be pushed: a broad wash, to banding per pixel. */
+const MIN_DENSITY = 0.1;
+const MAX_DENSITY = 20;
+
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
 const $ = (id) => document.getElementById(id);
 
 const canvas = $('canvas');
@@ -183,6 +189,9 @@ function updateReadout() {
 	$('iter').textContent =
 		state.maxIterations.toLocaleString() + (state.autoIterations ? ' (auto)' : '');
 	$('math').textContent = state.deep ? `perturbation · ${state.prec} bits` : 'double precision';
+	$('colour').textContent =
+		`${state.palette} · bands ×${state.density.toFixed(2)}` +
+		(state.offset ? ` · shift ${state.offset.toFixed(2)}` : '');
 	document
 		.querySelector('[data-act="auto"]')
 		.setAttribute('aria-pressed', String(state.autoIterations));
@@ -328,18 +337,30 @@ const actions = {
 		state.palette = PALETTES[next];
 		recolor();
 	},
+	// Phase: slide the whole palette along without changing how fast it cycles.
 	shift: () => {
 		state.offset = (state.offset + 0.12) % 1;
 		recolor();
 	},
-	spread: (by) => {
-		state.density = Math.max(0.1, Math.min(20, state.density * by));
-		recolor();
-	},
+	// Frequency: how many times the palette repeats across the same picture.
+	'bands-down': () => bandsBy(1 / 1.25),
+	'bands-up': () => bandsBy(1.25),
 	link: copyLink,
 	save: savePNG,
 	help: () => help.showModal(),
 };
+
+/**
+ * Change how many times the palette repeats across the picture.
+ *
+ * A step of 1.25 is fine enough to hunt with and coarse enough to get
+ * somewhere. Kept out of `actions` on purpose: those are called with no
+ * arguments by the toolbar, and this one would take a multiplier of undefined.
+ */
+function bandsBy(factor) {
+	state.density = clamp(state.density * factor, MIN_DENSITY, MAX_DENSITY);
+	recolor();
+}
 
 /** Palette changes never touch the maths, so re-use what we already computed. */
 function recolor() {
@@ -382,8 +403,8 @@ window.addEventListener('keydown', (event) => {
 
 	if (key === '+' || key === '=') return void actions['iter-up']();
 	if (key === '-' || key === '_') return void actions['iter-down']();
-	if (key === '[') return void actions.spread(1 / 1.25);
-	if (key === ']') return void actions.spread(1.25);
+	if (key === '[') return void actions['bands-down']();
+	if (key === ']') return void actions['bands-up']();
 	if (key === 'h') return void document.body.classList.toggle('hide-ui');
 
 	const action = map[key];

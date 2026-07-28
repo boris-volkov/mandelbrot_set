@@ -33,7 +33,8 @@ The code for this current interface is largely based on that provided in the O'R
 | `+` / `−` | more / fewer iterations |
 | `a` | automatic iteration count |
 | `p` | next palette |
-| `c`, `[`, `]` | shift the colours, spread them out or in |
+| `c` | shift the colours along |
+| `[` / `]` | wider / narrower colour bands |
 | `l` | copy a link to exactly this view |
 | `s` | save a PNG |
 | `h` | hide the interface |
@@ -161,6 +162,13 @@ escape value to the start of the palette looks right, but the palette is a
 *cycle* — an anchor buys no extra colour, it only rotates the wheel — and since
 the range shifts a little every step, anchoring to it turned every step into a
 rotation.
+
+On top of all that sit the two controls, which are simply the two things you
+can do to a cycle: `[` and `]` change its **frequency**, how many times the
+palette repeats across the picture, from a broad wash to banding at the pixel
+level; `c` changes its **phase**, sliding the whole thing along. Both are pure
+re-colouring — under a millisecond, no iteration recomputed — and both ride in
+the URL, so a link carries the colours you chose.
 
 Within a frame, the palette was also being re-derived as tiles arrived, so the
 image re-coloured under you mid-render. It doesn't depend on the tiles at all
