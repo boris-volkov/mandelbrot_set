@@ -170,6 +170,14 @@ level; `c` changes its **phase**, sliding the whole thing along. Both are pure
 re-colouring — under a millisecond, no iteration recomputed — and both ride in
 the URL, so a link carries the colours you chose.
 
+Rather than take those on faith, the strip under the readout draws the
+function itself: the palette, laid flat, repeated exactly as many times as
+it's currently repeating across the picture, with a tick mark at every
+seam so the count is something you can check rather than read off a
+"×1.95". It's not a separate calculation — `spectrum()` in `palette.js`
+places colours in the same phase space `colorize()` does, so the strip
+can't say anything the picture itself doesn't.
+
 Within a frame, the palette was also being re-derived as tiles arrived, so the
 image re-coloured under you mid-render. It doesn't depend on the tiles at all
 now, so there is nothing left to re-derive.

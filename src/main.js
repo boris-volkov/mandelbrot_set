@@ -1,7 +1,7 @@
 // Wiring: input, history, the readout, and the timer.
 
 import { toDecimalString } from './fixed.js';
-import { PALETTES } from './palette.js';
+import { mapping, PALETTES, spectrum } from './palette.js';
 import { Renderer } from './render.js';
 import { MIN_PER_PIXEL, ViewState } from './state.js';
 import { Viewport } from './view.js';
@@ -24,6 +24,13 @@ const canvas = $('canvas');
 const progress = $('progress');
 const toast = $('toast');
 const help = $('help');
+const spectrumCanvas = $('spectrum');
+const spectrumCtx = spectrumCanvas.getContext('2d');
+// Scratch surface the spectrum is drawn into at one pixel tall, then stretched
+// to fill the visible strip. A gradient is exactly as cheap to draw at any
+// height, so there's no reason to compute more than one row of it.
+const spectrumStrip = document.createElement('canvas');
+const spectrumStripCtx = spectrumStrip.getContext('2d');
 
 let scale = 1;
 let state;
@@ -189,12 +196,66 @@ function updateReadout() {
 	$('iter').textContent =
 		state.maxIterations.toLocaleString() + (state.autoIterations ? ' (auto)' : '');
 	$('math').textContent = state.deep ? `perturbation · ${state.prec} bits` : 'double precision';
-	$('colour').textContent =
-		`${state.palette} · bands ×${state.density.toFixed(2)}` +
-		(state.offset ? ` · shift ${state.offset.toFixed(2)}` : '');
+	$('colour').textContent = state.palette;
 	document
 		.querySelector('[data-act="auto"]')
 		.setAttribute('aria-pressed', String(state.autoIterations));
+	drawSpectrum();
+}
+
+/**
+ * A picture of the colouring function in place of the numbers for it.
+ *
+ * "Bands ×1.95" and "shift 0.34" only mean something once you've done the
+ * mental arithmetic; this is that arithmetic, done for you and drawn as a
+ * strip. It's the palette laid flat and repeated -- count the copies and
+ * that's the frequency, see where the pattern starts and that's the phase.
+ *
+ * The number of repeats shown is density × stretch, not density alone: it's
+ * the *actual* multiplier being applied to the picture right now, including
+ * the automatic depth-driven doubling from mapping() that bands ± doesn't
+ * control directly. Showing density alone would make the strip lie about
+ * what's on screen every time depth silently bumps the level.
+ */
+function drawSpectrum() {
+	const box = spectrumCanvas.getBoundingClientRect();
+	const width = Math.max(1, Math.round(box.width * scale));
+	spectrumCanvas.width = width;
+	spectrumCanvas.height = Math.max(1, Math.round(22 * scale));
+
+	const { stretch } = mapping(state.nominalIterations, state.density, state.offset);
+	const cycles = state.density * stretch;
+
+	spectrumStrip.width = width;
+	spectrumStrip.height = 1;
+	const colours = spectrum(width, { palette: state.palette, cycles, offset: state.offset });
+	const image = new ImageData(width, 1);
+	new Uint32Array(image.data.buffer).set(colours);
+	spectrumStripCtx.putImageData(image, 0, 0);
+
+	spectrumCtx.drawImage(spectrumStrip, 0, 0, width, spectrumCanvas.height);
+
+	// One tick per full repeat, so the count in "cycles" is something you can
+	// verify by eye rather than take on faith. Skipped once they'd be closer
+	// together than a few pixels -- past that they'd just be noise. Drawn with
+	// a difference blend rather than a fixed colour, so a tick reads against a
+	// bright band and a dark one alike instead of vanishing into whichever
+	// palette happens to be showing.
+	const period = width / cycles;
+	if (period > 4) {
+		spectrumCtx.globalCompositeOperation = 'difference';
+		spectrumCtx.strokeStyle = '#fff';
+		spectrumCtx.lineWidth = Math.max(1, Math.round(scale));
+		const first = (1 - (state.offset % 1)) * period;
+		spectrumCtx.beginPath();
+		for (let x = first; x < width; x += period) {
+			const px = Math.round(x) + 0.5;
+			spectrumCtx.moveTo(px, 0);
+			spectrumCtx.lineTo(px, spectrumCanvas.height);
+		}
+		spectrumCtx.stroke();
+		spectrumCtx.globalCompositeOperation = 'source-over';
+	}
 }
 
 function formatZoom(zoom) {

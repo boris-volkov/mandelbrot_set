@@ -420,6 +420,54 @@
 			}
 
 			{
+				// The spectrum strip is the graphical stand-in for "bands" and
+				// "shift": count the repeats, see where the pattern starts. It has
+				// to actually repeat the right number of times and start in the
+				// right place, or the picture would be lying same as the numbers
+				// could.
+				const { spectrum } = await import('./src/palette.js');
+				const W = 1200; // fine enough that rounding to a pixel index is negligible
+
+				const two = spectrum(W, { palette: 'classic', cycles: 2, offset: 0 });
+				check(
+					'two cycles returns to the start colour halfway across',
+					two[0] === two[Math.round(W / 2)] && two[0] !== two[Math.round(W / 4)],
+					'the second repeat begins exactly at the midpoint',
+				);
+
+				// offset is a fraction of *one cycle*, not of the strip -- at
+				// cycles=1 those coincide, so a quarter-turn offset is a quarter
+				// of the width, and this is the simplest place to pin that down.
+				const plain = spectrum(W, { palette: 'classic', cycles: 1, offset: 0 });
+				const nudged = spectrum(W, { palette: 'classic', cycles: 1, offset: 0.25 });
+				check(
+					'offset slides the pattern without changing its rate',
+					nudged[0] === plain[Math.round(W * 0.25)] &&
+						plain.length === nudged.length,
+					'a quarter-turn shift reads like starting a quarter of the way in',
+				);
+
+				check(
+					'every pixel of the strip is opaque',
+					[...spectrum(64, { palette: 'ultra', cycles: 2.5, offset: 0.4 })].every(
+						(p) => p >>> 24 === 255,
+					),
+				);
+
+				// A fractional cycle count -- the ordinary case, since it's
+				// density × an automatic power-of-two stretch -- must still
+				// produce a strip exactly one cycle long when asked for one.
+				const fractional = spectrum(W, { palette: 'mono', cycles: 1, offset: 0 });
+				const wrap = fractional[fractional.length - 1];
+				const start = fractional[0];
+				check(
+					'a strip of exactly one cycle rejoins itself at the seam',
+					Math.abs((wrap & 0xff) - (start & 0xff)) < 8,
+					`last pixel and first pixel are one LUT step apart, not a jump`,
+				);
+			}
+
+			{
 				// Deep down everything escapes at nearly the same count. Without
 				// the stretch that frame is one flat colour. Distinct colours is
 				// the wrong measure -- two neighbouring palette entries count as

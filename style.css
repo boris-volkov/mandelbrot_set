@@ -82,6 +82,15 @@ body.hide-ui #progress {
 	user-select: text;
 }
 
+#spectrum {
+	display: block;
+	width: 100%;
+	height: 22px;
+	margin-top: 9px;
+	border-radius: 5px;
+	cursor: default;
+}
+
 /* --- toolbar ------------------------------------------------------------ */
 
 #toolbar {

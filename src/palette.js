@@ -188,3 +188,28 @@ export function colorize(values, target, { palette, density, offset, maxIteratio
 		pixels[i] = lut[(((t % LUT_SIZE) + LUT_SIZE) % LUT_SIZE) | 0];
 	}
 }
+
+/**
+ * The palette itself, laid flat: `cycles` repeats of it, starting `offset` of
+ * the way through one.
+ *
+ * This is what "bands" and "shift" actually are, with nothing else in the
+ * way. colorize() reaches this same phase -- curve(nu)*scale + shift -- by a
+ * longer road, because it starts from an escape count and has to work out
+ * where that lands; here we get to specify the phase directly, since a
+ * picture of the *function* doesn't have escape counts to begin with, only
+ * position along the strip. `cycles` and `offset` mean exactly what they mean
+ * in mapping(): scale is cycles-per-unit-width and shift is offset*LUT_SIZE.
+ *
+ * @returns {Uint32Array} one packed RGBA colour per pixel of width
+ */
+export function spectrum(width, { palette, cycles = 1, offset = 0 }) {
+	const lut = lutFor(palette);
+	const n = Math.max(1, Math.round(width));
+	const out = new Uint32Array(n);
+	for (let x = 0; x < n; x++) {
+		const t = (x / n) * cycles * LUT_SIZE + offset * LUT_SIZE;
+		out[x] = lut[(((t % LUT_SIZE) + LUT_SIZE) % LUT_SIZE) | 0];
+	}
+	return out;
+}
