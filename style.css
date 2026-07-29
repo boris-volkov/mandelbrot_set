@@ -52,12 +52,12 @@ body.hide-ui #progress {
 
 #readout {
 	position: fixed;
-	top: 12px;
-	left: 12px;
-	padding: 10px 12px;
+	top: 8px;
+	left: 8px;
+	padding: 7px 10px;
 	background: var(--panel);
 	border: 1px solid var(--edge);
-	border-radius: 10px;
+	border-radius: 9px;
 	backdrop-filter: blur(8px);
 	max-width: min(60vw, 460px);
 	transition: opacity 0.2s;
@@ -67,7 +67,7 @@ body.hide-ui #progress {
 #readout .row {
 	display: flex;
 	gap: 10px;
-	line-height: 1.6;
+	line-height: 1.4;
 }
 
 #readout .key {
@@ -88,51 +88,68 @@ body.hide-ui #progress {
 	/* gradient (16px) + axis labels (12px) -- keep in sync with main.js's
 	   SPECTRUM_GRADIENT_H / SPECTRUM_LABEL_H */
 	height: 28px;
-	margin-top: 9px;
+	margin-top: 6px;
 	border-radius: 5px;
 	cursor: default;
 }
 
 /* --- toolbar ------------------------------------------------------------ */
 
+/* One flat bar, not five separate pills: a real control strip rather than a
+   row of buttons floating in their own islands. It sizes to its content and
+   only fills the viewport width once it has to -- a compact dock on desktop,
+   a horizontally-scrolling strip on anything narrower than its contents,
+   which is what keeps it to a single row instead of wrapping to several. */
 #toolbar {
 	position: fixed;
 	left: 50%;
-	bottom: 14px;
+	bottom: 6px;
 	transform: translateX(-50%);
 	display: flex;
-	flex-wrap: wrap;
-	justify-content: center;
-	gap: 8px;
-	padding: 0 10px;
-	max-width: 100vw;
+	align-items: stretch;
+	width: fit-content;
+	max-width: calc(100vw - 12px);
+	overflow-x: auto;
+	overflow-y: hidden;
+	background: var(--panel);
+	border: 1px solid var(--edge);
+	border-radius: 9px;
+	backdrop-filter: blur(8px);
 	transition: opacity 0.2s;
+	scrollbar-width: thin;
+}
+
+#toolbar::-webkit-scrollbar {
+	height: 5px;
+}
+
+#toolbar::-webkit-scrollbar-thumb {
+	background: var(--edge);
+	border-radius: 3px;
 }
 
 #toolbar .group {
 	display: flex;
-	background: var(--panel);
-	border: 1px solid var(--edge);
-	border-radius: 999px;
-	overflow: hidden;
-	backdrop-filter: blur(8px);
+	flex: none;
+	border-right: 1px solid var(--edge);
+}
+
+#toolbar .group:last-child {
+	border-right: 0;
 }
 
 #toolbar button {
 	appearance: none;
 	background: none;
 	border: 0;
-	border-right: 1px solid var(--edge);
 	color: var(--accent);
 	font: inherit;
-	padding: 9px 13px;
+	font-size: 11.5px;
+	padding: 7px 9px;
 	cursor: pointer;
 	white-space: nowrap;
+	flex: none;
 	transition: background 0.12s;
-}
-
-#toolbar .group button:last-child {
-	border-right: 0;
 }
 
 #toolbar button:hover {
@@ -228,7 +245,7 @@ body.hide-ui #progress {
 #toast {
 	position: fixed;
 	left: 50%;
-	bottom: 74px;
+	bottom: 46px;
 	transform: translateX(-50%);
 	padding: 8px 14px;
 	background: var(--panel);
@@ -300,15 +317,12 @@ body.hide-ui #progress {
 @media (max-width: 620px) {
 	#readout {
 		font-size: 11px;
+		padding: 6px 9px;
 		max-width: 70vw;
 	}
 
 	#progress {
 		width: 170px;
-	}
-
-	#toolbar button {
-		padding: 9px 10px;
 	}
 }
 

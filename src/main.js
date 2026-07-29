@@ -199,7 +199,6 @@ function updateReadout() {
 	$('iter').textContent =
 		state.maxIterations.toLocaleString() + (state.autoIterations ? ' (auto)' : '');
 	$('math').textContent = state.deep ? `perturbation · ${state.prec} bits` : 'double precision';
-	$('colour').textContent = state.palette;
 	document
 		.querySelector('[data-act="auto"]')
 		.setAttribute('aria-pressed', String(state.autoIterations));
