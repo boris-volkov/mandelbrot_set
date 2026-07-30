@@ -97,28 +97,21 @@ function lutFor(name) {
 	return lut;
 }
 
-/**
- * Iteration limit the palette is tuned around: at this many, it doesn't
- * stretch at all and the mapping is the one this program has always used.
- *
- * Tied to the automatic iteration count, so it moved with it when that was
- * trimmed by 1.5x. The palette is really keyed to *depth*; iterations are the
- * stand-in. Had this stayed put, trimming the count would have quietly dropped
- * some views a colour level for no reason connected to how they look.
- */
-const REFERENCE_ITERATIONS = 800;
-
-/**
- * How the curve's flattening is undone. pow(nu, 0.4) has slope 0.4·nu^-0.6, so
- * scaling by nu^0.6 keeps a given spread of iterations covering the same amount
- * of palette however deep you are.
- */
-const FLATTENING = 0.6;
-
 /** Escape counts crowd near the boundary; this is the curve that undoes that. */
 const CURVE_EXPONENT = 0.4;
 
 const curve = (nu) => Math.pow(nu > 0 ? nu : 0, CURVE_EXPONENT);
+
+/**
+ * How many times the palette should repeat at density 1, before the user's
+ * bands control multiplies it further. Not 1 exactly: rounding to the nearest
+ * power of two means the achieved count wanders within a factor of sqrt(2) of
+ * whatever this is aimed at, so aiming for 1 dead-on would let it drift down
+ * to ~0.7 -- visibly under-coloured, most of a cycle unused. 1.3 keeps the
+ * whole wander band inside [~0.9, ~1.8]: always at least one full sweep of
+ * the palette, never quite two.
+ */
+const TARGET_BANDS = 1.3;
 
 /**
  * Work out how escape values map onto the palette.
@@ -127,20 +120,24 @@ const curve = (nu) => Math.pow(nu > 0 ? nu : 0, CURVE_EXPONENT);
  * the part that decides whether the colours hold still as you zoom, and it is
  * far easier to check a handful of numbers than to squint at two pictures.
  *
+ * @param maxIterations  the real, measured iteration cap for this view -- the
+ *   same number the picture's own black-pixel cutoff uses, not a depth guess
  * @returns {{scale: number, shift: number, stretch: number}}
  */
 export function mapping(maxIterations, density = 1, offset = 0) {
-	// Three decisions here, all about holding the colours still while you zoom.
+	// Three decisions here, all about holding the colours still while you zoom,
+	// plus a fourth about how many bands you actually see.
 	//
-	// The scale is read off the iteration limit, not off the spread of escape
-	// values actually measured in the frame. Measuring seems obviously better
-	// -- it's the real answer to "how much colour does this picture need" --
-	// but it makes the palette follow the picture, and in a smooth region the
-	// spread halves on every zoom step. So the scale doubles on every zoom
-	// step, and the colours change every single time. Zooming into open water
-	// went x1, x8, x32, x64, x256 in five clicks. The iteration limit moves
-	// slowly and predictably instead, so the colours hold for long runs and
-	// shift a handful of times over an entire descent.
+	// The scale is read off the iteration *cap*, not off the spread of escape
+	// values actually measured in the frame. Measuring the spread seems
+	// obviously better -- it's the real answer to "how much colour does this
+	// picture need" -- but it makes the palette follow the picture pixel by
+	// pixel, and in a smooth region that spread halves on every zoom step. So
+	// the scale would double every step, and the colours would change every
+	// single time. The cap moves far more slowly (see Renderer#measureIterations
+	// -- it has its own hysteresis for exactly this reason), so the colours
+	// hold for long runs and shift only when the picture's actual character
+	// changes enough to justify it.
 	//
 	// Nothing is anchored to where the range starts, either. Pinning the lowest
 	// escape value to the start of the palette looks right, but the palette is
@@ -151,8 +148,19 @@ export function mapping(maxIterations, density = 1, offset = 0) {
 	// And the scale is rounded to a power of two, so between changes the
 	// mapping is *identical* rather than merely close. A run of zooming leaves
 	// the colours exactly where they were.
-	const wanted = (maxIterations / REFERENCE_ITERATIONS) ** FLATTENING;
-	const stretch = 2 ** Math.max(0, Math.round(Math.log2(wanted)));
+	//
+	// What's new is the *target*. curve(nu)*scale/LUT_SIZE is literally the
+	// number of times the palette repeats between 0 and the cap --
+	// repeatsAcross(), below -- so solving that equation for the scale that
+	// makes it equal TARGET_BANDS is exact, not a proxy. Older versions keyed
+	// this to *depth* instead of the cap, which is why "usually 1, at most 2
+	// bands" needed constant manual correction: depth alone can't predict the
+	// cap. At one fixed depth the real cap ranged from 400 to 27,750 depending
+	// only on where you were pointing (Renderer#measureIterations has the
+	// numbers) -- no function of depth fits a 70-fold spread, but reading the
+	// cap directly doesn't need to fit it, it just measures it.
+	const wanted = (TARGET_BANDS * TAU) / curve(maxIterations);
+	const stretch = 2 ** Math.round(Math.log2(wanted));
 
 	return {
 		stretch,

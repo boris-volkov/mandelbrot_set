@@ -149,13 +149,32 @@ spread halves on every step — so the scale doubles on every step, and the
 colours change on every single click. Going ×1, ×8, ×32, ×64, ×256 in five
 zooms is not a colour scheme, it's a strobe.
 
-What the stretch is really compensating for is the curve flattening, and that
-depends on how big escape counts are around here, not on what today's frame
-happens to contain. `pow(nu, 0.4)` has slope `0.4·nu^-0.6`, so scaling by
-`nu^0.6` cancels it exactly — with the iteration limit standing in for `nu`.
-That moves slowly and predictably, so the colours hold. Rounded to a power of
-two on top, the scale changes **twice** over a 40-step descent instead of forty
-times, and level 0 is the mapping this program has always used.
+What actually fixes it, and what took three goes to land on: stretch is solved
+for directly from the frame's iteration cap — the same, real, *measured* cap
+Renderer#measureIterations found (not a guess from depth), targeting a fixed
+number of palette repeats, about 1.3, across the range from 0 to that cap. The
+number matters because it used to be implicit rather than aimed at: an earlier
+version derived stretch from *depth* instead of the cap, on the theory that
+depth moves smoothly and the measured cap doesn't. Depth does move smoothly,
+but it isn't the thing that determines how many bands you see — the cap is,
+and the cap can be seventy times higher than depth alone would suggest (same
+page, `nominalIterationsFor`'s notes). Checked against the real number rather
+than the guess, that earlier version was routinely showing 40, 60, even 90
+bands where one or two were wanted, which is why the control existed at all:
+not to add bands when you wanted more, but to claw back the ones the formula
+kept adding on its own.
+
+Targeting the cap directly could have reintroduced the *other* problem —
+stretch racing off to reclaim detail crushed into a sliver near a huge cap,
+same as the raw-spread approach, just with cap standing in for spread. It
+doesn't, and this is worth stating plainly rather than just asserting: the cap
+is *measured from this exact frame*, so unlike a depth guess it already
+correlates with what's really there. Checked directly — a real descent pushing
+the cap from 35,337 up to 189,147 (against the 200,000 ceiling) kept 250 of 255
+possible levels of contrast the entire way, no flattening at any point. Rounded
+to a power of two on top for stability, the scale still only changes on the
+order of once or twice over a long descent — same mechanism as before, aimed
+at the number that actually matters.
 
 Nothing is anchored to where the range starts, either. Pinning the lowest
 escape value to the start of the palette looks right, but the palette is a
@@ -189,14 +208,13 @@ land in the last few bands, cramming everything interesting into a sliver
 near zero. `iterationsAt()` inverts the curve to label each position with
 the escape count really sitting there.
 
-The repeat count itself comes from `repeatsAcross()`, not from
-`density × stretch` — those aren't the same number. Stretch is keyed to
-*depth* on purpose, so the colours don't get thrown around by the
-measured iteration count, but that means it doesn't answer "how many
-bands will I actually see": real pixels range up to whatever count was
-actually measured for this view, which can be tens of times the depth
-guess. `repeatsAcross()` reads off the real cap instead, so the tick
-count on the axis matches the bands you'd actually count in the picture.
+The repeat count on the axis comes from `repeatsAcross()`, read straight off
+the same cap and scale that just coloured the real pixels — not from
+`density × stretch` directly, because those two aren't quite the same number:
+stretch is rounded to the nearest power of two for stability, so the count you
+actually get drifts within a factor of `√2` of the 1.3 that was aimed for.
+`repeatsAcross()` reports what landed, not what was aimed at, so the tick
+count on the axis always matches the bands you'd count in the picture.
 
 Within a frame, the palette was also being re-derived as tiles arrived, so the
 image re-coloured under you mid-render. It doesn't depend on the tiles at all

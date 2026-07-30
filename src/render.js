@@ -368,8 +368,9 @@ export class Renderer {
 			palette: state.palette,
 			density: state.density,
 			offset: state.offset,
-			// Depth, not the measured count: see ViewState#nominalIterations.
-			maxIterations: state.nominalIterations,
+			// The real cap, so the palette targets ~1 band across the escape
+			// range this picture actually has -- see mapping() in palette.js.
+			maxIterations: state.maxIterations,
 		});
 		this.#ctx.putImageData(image, tile.x, tile.y);
 	}

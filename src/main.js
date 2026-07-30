@@ -243,14 +243,12 @@ function formatNu(n) {
  * way: what escape count is really at this position.
  *
  * The repeat count -- how many times the palette actually wraps between 0 and
- * the cap -- comes from repeatsAcross(), not from density × stretch. Those
- * aren't the same number: stretch is keyed to *depth* (nominalIterations) on
- * purpose, so the colours don't get thrown around by the measured count, but
- * that means it doesn't answer "how many bands will I actually see" -- the
- * picture's real pixels range up to whatever iteration count was actually
- * measured, which can be tens of times the depth guess. repeatsAcross() reads
- * off the real cap, so the tick count on screen matches the bands you'd
- * actually count in the picture.
+ * the cap -- comes from repeatsAcross(), read straight off the same cap and
+ * scale mapping() used to colour the real pixels. It won't be exactly the
+ * bands ± density multiplier, because mapping()'s stretch is rounded to the
+ * nearest power of two for stability; repeatsAcross() reports what actually
+ * landed, not what was aimed for, so the tick count on the axis always
+ * matches the bands you'd count in the picture.
  */
 function drawSpectrum() {
 	const box = spectrumCanvas.getBoundingClientRect();
@@ -261,7 +259,7 @@ function drawSpectrum() {
 	spectrumCanvas.height = gradientH + labelH;
 
 	const cap = Math.max(1, state.maxIterations);
-	const { scale: paletteScale } = mapping(state.nominalIterations, state.density, state.offset);
+	const { scale: paletteScale } = mapping(cap, state.density, state.offset);
 	const cycles = repeatsAcross(cap, paletteScale);
 
 	spectrumStrip.width = width;

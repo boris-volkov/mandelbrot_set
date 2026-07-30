@@ -54,8 +54,8 @@ export const MIN_PER_PIXEL = 1e-295;
 export const MAX_ITERATIONS = 200_000;
 
 /**
- * A depth-derived iteration count. Two jobs, neither of them "the right
- * number", because there is no right number as a function of depth.
+ * A depth-derived iteration count. Not "the right number" -- there is no right
+ * number as a function of depth alone.
  *
  * How many iterations a frame needs depends overwhelmingly on *where* it is,
  * not how deep. Measured at one scale, 2.1e-14 per pixel: a spot on the antenna
@@ -66,12 +66,11 @@ export const MAX_ITERATIONS = 200_000;
  * perPixel can fit that, so the renderer measures instead: see
  * Renderer#measureIterations.
  *
- * What this is still good for:
- *
- *   - a starting guess for that search, which only affects how many probes it
- *     takes to converge;
- *   - keying the palette, which wants something that moves smoothly and
- *     predictably with depth and would be thrown around by the real count.
+ * All this is still good for is a starting guess for that search -- it only
+ * affects how many probes the search takes to converge, never what it
+ * converges to. (The palette used to be keyed to this instead of the real
+ * cap, for the same "don't let it jump around" reason; that turned out to
+ * need the real cap too -- see mapping() in palette.js.)
  */
 export function nominalIterationsFor(perPixel) {
 	const decades = Math.max(0, Math.log10(REFERENCE_SCALE / perPixel));
@@ -139,16 +138,6 @@ export class ViewState {
 
 	get deep() {
 		return this.needsPerturbation();
-	}
-
-	/**
-	 * What the palette is keyed to. Depth only -- deliberately not the actual
-	 * iteration count, which the renderer measures per view and which therefore
-	 * jumps around between neighbouring frames. Colours should follow how deep
-	 * you are, not how awkward the local scenery turned out to be.
-	 */
-	get nominalIterations() {
-		return nominalIterationsFor(this.perPixel);
 	}
 
 	/**

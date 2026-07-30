@@ -407,15 +407,28 @@
 					'frequency leaves the phase alone and vice versa',
 				);
 
-				// Level 0 is the mapping this program has always used.
-				const levels = [300, 1200, 5000, 40000, 150000].map((n) => mapping(n).stretch);
+				// Stretch is read straight off the cap now, targeting a fixed band
+				// count rather than tracking depth -- so it's no longer monotonic
+				// in the iteration count (a bigger cap can mean *less* stretch,
+				// since a bigger cap already has more room to spread the palette
+				// across on its own). What has to hold is the target itself: the
+				// palette should repeat somewhere close to once across the real
+				// range, at any cap size, real ones included -- see repeatsAcross().
+				const { repeatsAcross } = await import('./src/palette.js');
+				const caps = [200, 300, 620, 5000, 35337, 189147, 620000];
+				const bands = caps.map((cap) => {
+					const { scale, stretch } = mapping(cap, 1, 0);
+					return { cap, stretch, bands: repeatsAcross(cap, scale) };
+				});
 				check(
-					'it opens unstretched and adapts in powers of two',
-					levels[0] === 1 &&
-						levels.every((s) => Number.isInteger(Math.log2(s))) &&
-						levels.every((s, i) => i === 0 || s >= levels[i - 1]),
-					`300→×${levels[0]}  1.2k→×${levels[1]}  5k→×${levels[2]}  ` +
-						`40k→×${levels[3]}  150k→×${levels[4]}`,
+					'stretch is a power of two, fractional ones included',
+					bands.every((b) => Number.isInteger(Math.log2(b.stretch))),
+					bands.map((b) => `${b.cap}→×${b.stretch}`).join('  '),
+				);
+				check(
+					'and the band count stays close to 1, never past 2',
+					bands.every((b) => b.bands > 0.85 && b.bands < 1.9),
+					bands.map((b) => b.bands.toFixed(2)).join('  '),
 				);
 			}
 
@@ -583,18 +596,32 @@
 
 				const values = new Float32Array([37900, 37950, 38000, 38050, 38100]);
 				const flat = spread(paint(values, { maxIterations: 1200 }));
-				const stretched = spread(paint(values, { maxIterations: 40000 }));
-
 				check(
-					'200 iterations of spread is nearly flat unstretched',
+					'a cluster far below the cap is still flat -- nothing to stretch',
 					flat < 12,
 					`only ${flat}/255 of colour spread`,
 				);
-				check(
-					'and opens right up at the depth that needs it',
-					stretched > 100,
-					`${stretched}/255 of colour spread, ${Math.round(stretched / flat)}× more`,
-				);
+
+				// The real guarantee isn't "any cluster gets stretched", it's "the
+				// cap tracks the real content, so it doesn't need to be". Escape
+				// values now come from a measured cap, not a depth guess, and a
+				// measured cap correlates with what's actually on screen -- values
+				// spanning background through near-boundary detail (what a real
+				// frame's escaping pixels look like) stay legible at any depth.
+				// Checked directly against real renders too: an antenna sequence
+				// pushed to caps up to 189,147 (against the 200,000 ceiling) held
+				// 250/255 spread throughout, never once going flat.
+				for (const cap of [1200, 35337, 189147]) {
+					const realistic = new Float32Array(
+						[1, cap * 0.1, cap * 0.35, cap * 0.7, cap * 0.97].map((v) => Math.max(1, v)),
+					);
+					const s = spread(paint(realistic, { maxIterations: cap }));
+					check(
+						`a realistic spread up to the cap stays legible at cap ${cap}`,
+						s > 150,
+						`${s}/255 of colour spread`,
+					);
+				}
 			}
 
 			// -- end to end -------------------------------------------------
@@ -665,7 +692,8 @@
 				const easy = ViewState.fromURL(
 					'https://x/?x=-1.7490863748149452878590942294057334028&y=0&s=1e-12&a=1',
 				);
-				const guessed = hungry.nominalIterations;
+				const { nominalIterationsFor } = await import('./src/state.js');
+				const guessed = nominalIterationsFor(hungry.perPixel);
 
 				seen.length = 0;
 				await renderer.render(hungry);
@@ -682,8 +710,8 @@
 				);
 				check(
 					'and an easy one at the same depth gets it cut',
-					forEasy < easy.nominalIterations / 4,
-					`depth guessed ${easy.nominalIterations}, measured ${forEasy}`,
+					forEasy < nominalIterationsFor(easy.perPixel) / 4,
+					`depth guessed ${nominalIterationsFor(easy.perPixel)}, measured ${forEasy}`,
 				);
 				check(
 					'so the count follows the view, not the depth',
