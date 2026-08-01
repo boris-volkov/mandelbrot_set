@@ -465,8 +465,10 @@ const actions = {
 		recolor();
 	},
 	// Phase: slide the whole palette along without changing how fast it cycles.
+	// A small step -- fine enough to nudge the colours into place rather than
+	// jump past where you wanted.
 	shift: () => {
-		state.offset = (state.offset + 0.12) % 1;
+		state.offset = (state.offset + 0.04) % 1;
 		recolor();
 	},
 	// Frequency: how many times the palette repeats across the same picture.
